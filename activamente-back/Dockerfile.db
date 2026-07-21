@@ -1,0 +1,4 @@
+FROM postgres:16
+
+COPY ./database/init.sql /docker-entrypoint-initdb.d/01_init.sql
+COPY ./database/seed.sql /docker-entrypoint-initdb.d/02_seed.sql
