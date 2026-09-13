@@ -6,11 +6,11 @@ from uuid import UUID
 from app.database import get_db
 from app.core.deps import get_current_user
 from app.models.user_model import User
-from app.models.session import Session as SessionModel
-from app.models.session_model import SessionExercise
+from app.models.session_model import Session as SessionModel
+from app.models.session_exercise_model import SessionExercise
 from app.models.routine_model import RoutineExercise
-from app.schemas.session import SessionCreate, SessionResponse
-from app.schemas.session_schema import SessionExerciseUpdate, SessionExerciseResponse
+from app.schemas.session_schema import SessionCreate, SessionResponse
+from app.schemas.session_exercise_schema import SessionExerciseUpdate, SessionExerciseResponse
 
 router = APIRouter(
     prefix="/api/sessions",

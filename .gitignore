@@ -1,0 +1,39 @@
+# Entornos / secretos
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+*.egg-info/
+
+# Node / Expo
+node_modules/
+.expo/
+expo-env.d.ts
+dist/
+web-build/
+
+# Android (build artifacts; el código nativo sí se versiona)
+android/build/
+android/.gradle/
+android/app/build/
+android/app/.cxx/
+*.keystore
+!debug.keystore
+
+# Editores / SO
+.vscode/
+.idea/
+.DS_Store
+*.swp
+
+# Documentación privada de trabajo (no se publica en el repositorio)
+CLAUDE.md
+**/CLAUDE.md
+improvements.md
+planning.md

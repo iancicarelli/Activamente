@@ -164,12 +164,6 @@ const styles = StyleSheet.create({
     fontFamily: Fonts.bold,
     color: Colors.textPrimary,
   },
-  profileMeta: {
-    fontSize: 13,
-    fontFamily: Fonts.regular,
-    color: Colors.textSecondary,
-    marginTop: 2,
-  },
   specialtyPill: {
     flexDirection: "row",
     alignItems: "center",

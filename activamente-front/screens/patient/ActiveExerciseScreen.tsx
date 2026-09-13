@@ -118,44 +118,16 @@ const PoseSkeleton = React.memo(
   ),
 );
 
-// ─── Pendiente: flujo completo del ejercicio ─────────────────────────────────
-//
-// La pantalla hoy hace tres cosas: pide cámara, corre el frame processor con
-// el validador del ejercicio activo, y muestra reps + feedback. Lo que falta
-// para tener el flujo end-to-end de la rutina:
-//
-//   1. Avance de serie:
-//      Cuando `(routine.currentReps + localReps) >= routine.totalReps`,
-//      cerrar la serie actual: persistir reps al back, resetear `localReps`,
-//      incrementar `currentSeries`, y entrar en un estado 'rest' con
-//      temporizador (descanso entre series).
-//
-//   2. Avance de ejercicio:
-//      Cuando se completen todas las series del ejercicio actual, pasar al
-//      siguiente ejercicio de la rutina. Esto implica que `getActiveRoutine`
-//      eventualmente devuelva una lista de ejercicios y un índice, no un
-//      único ejercicio plano como ahora.
-//
-//   3. Fin de rutina:
-//      Al terminar el último ejercicio, navegar a `/post-exercise-survey`
-//      automáticamente (hoy lo dispara el botón "Terminar" manualmente).
-//
-//   4. Botón "Pausar":
-//      Conectar handler que congele `isActive` de la cámara y pause la
-//      máquina de estados del validador (sin perder el contador).
-//
-//   5. Persistencia de progreso:
-//      Cada rep completada y cada serie cerrada deberían reportarse al back
-//      (servicio nuevo en `services/`), no solo quedar en memoria.
-//
-//   6. Manejo de "salida sin completar":
-//      Si el usuario aprieta back o "Terminar" antes de completar, decidir
-//      si se descarta lo hecho o se reporta parcial.
-//
 // ─── Main Screen ──────────────────────────────────────────────────────────────
+// La pantalla pide cámara, corre el frame processor con el validador del
+// ejercicio activo y muestra reps + feedback. El flujo completo de la rutina
+// (series, descanso, avance automático, pausa, salida) está planificado en
+// improvements.md (HC-01, HC-02, EX-10..12, BT-01, BT-02).
 export default function ActiveExerciseScreen() {
   const router = useRouter();
 
+  // sessionId y seIds vienen de PreviousSurveyScreen (POST /api/sessions) vía
+  // InstructionScreen. Sin sessionId el ejercicio corre pero no persiste.
   const { index, sessionId, seIds } = useLocalSearchParams();
   const exercise = EXERCISES[Number(index ?? 0)];
 
@@ -186,9 +158,6 @@ export default function ActiveExerciseScreen() {
   const [poseFeedbackOk, setPoseFeedbackOk] = useState<boolean>(true);
   const [localReps, setLocalReps]   = useState(0);
 
-  // ── Sesión backend (POST /api/sessions) ────────────────────────────────────
-  const [sessionLoading, setSessionLoading] = useState(true);
-  const [sessionError, setSessionError]     = useState<string | null>(null);
   const [progressError, setProgressError]   = useState<string | null>(null);
 
   // Los landmarks NO viven en el estado del root: se envían directo al esqueleto
@@ -199,9 +168,11 @@ export default function ActiveExerciseScreen() {
   // por frame; useState arriba sólo refleja el valor para el badge.
   const localRepsRef = useRef(0);
 
-  // session_id devuelto por el POST y series ya persistidas: en refs para que el
+  // session_id (de los params) y series ya persistidas: en refs para que el
   // callback del frame processor lea siempre el valor vigente sin re-suscribirse.
-  const sessionIdRef        = useRef<string | null>(null);
+  const sessionIdRef        = useRef<string | null>(
+    typeof sessionId === 'string' && sessionId.length > 0 ? sessionId : null,
+  );
   const seriesCompletedRef  = useRef(0);
 
   // Reset de reps locales al cambiar de ejercicio
@@ -209,19 +180,6 @@ export default function ActiveExerciseScreen() {
     localRepsRef.current = 0;
     setLocalReps(0);
   }, [exercise.exerciseId]);
-
-  // ── Session initialized from previous screen ──────────────────────────────────
-  const startSession = useCallback(() => {
-    setSessionLoading(false);
-    setSessionError(null);
-    if (typeof sessionId === 'string') {
-        sessionIdRef.current = sessionId;
-    }
-  }, [sessionId]);
-
-  useEffect(() => {
-    startSession();
-  }, [startSession]);
 
   // ── Persistir progreso al cerrar una serie (PUT) ────────────────────────────
   const persistProgress = useCallback(
@@ -315,27 +273,6 @@ export default function ActiveExerciseScreen() {
 
   if (device == null) {
     return <View style={styles.container}><ActivityIndicator size="large" /></View>;
-  }
-
-  // Sesión iniciándose: bloqueamos hasta tener session_id (o un error que reintentar)
-  if (sessionLoading) {
-    return (
-      <LinearGradient colors={['#DEEDE6', '#90C0C1']} style={styles.permissionContainer}>
-        <ActivityIndicator size="large" color="#27695A" />
-        <Text style={[styles.permissionText, { marginTop: 20 }]}>Iniciando sesión…</Text>
-      </LinearGradient>
-    );
-  }
-
-  if (sessionError) {
-    return (
-      <LinearGradient colors={['#DEEDE6', '#90C0C1']} style={styles.permissionContainer}>
-        <Text style={styles.permissionText}>{sessionError}</Text>
-        <TouchableOpacity style={styles.button} onPress={startSession}>
-          <Text style={styles.buttonText}>Reintentar</Text>
-        </TouchableOpacity>
-      </LinearGradient>
-    );
   }
 
   const activeFeedback = poseFeedback ?? null;

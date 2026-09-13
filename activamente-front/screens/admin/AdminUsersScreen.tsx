@@ -405,11 +405,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     flex: 1,
   },
-  userAvatar: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-  },
   userInitialsAvatar: {
     width: 44,
     height: 44,
@@ -493,16 +488,6 @@ const styles = StyleSheet.create({
     backgroundColor: '#DEEDE6',
     alignItems: 'center',
     justifyContent: 'center',
-  },
-  loadMoreButton: {
-    alignItems: 'center',
-    paddingVertical: 20,
-    marginTop: 10,
-  },
-  loadMoreText: {
-    fontSize: 12,
-    fontFamily: "PromptBold",
-    color: "rgba(39, 105, 90, 0.7)",
   },
   emptyState: {
     alignItems: 'center',

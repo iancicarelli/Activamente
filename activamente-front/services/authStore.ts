@@ -50,15 +50,8 @@ export function getToken(): string | null {
   return session?.token ?? null;
 }
 
-export function getRole(): UserRole | null {
-  return session?.role ?? null;
-}
-
-export function isAuthenticated(): boolean {
-  return session !== null;
-}
-
-// Subscribe to session changes (e.g. to redirect to login on logout).
+// Subscribe to session changes. Aún sin uso: es la base del guard de auth y del
+// redirect a login en 401 (improvements BT-07 / UX-03).
 // Returns an unsubscribe function.
 export function subscribe(cb: (session: AuthSession | null) => void): () => void {
   listeners.add(cb);

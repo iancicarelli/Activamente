@@ -4,7 +4,6 @@ from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.core.deps import get_current_user, require_specialist
-from app.core.security import hash_password
 from app.models.user_model import User, UserRole
 from app.models.patient_model import Patient
 from app.models.specialist_patient_model import SpecialistPatient

@@ -319,19 +319,10 @@ const styles = StyleSheet.create({
     marginTop: 4,
     lineHeight: 38,
   },
-  statTrendRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginTop: 4,
-  },
   statTrendText: {
     fontSize: 11,
     fontFamily: "PromptBold",
     color: "#27695A",
-  },
-  statTrendSubtext: {
-    fontFamily: "PromptRegular",
-    color: "rgba(39, 105, 90, 0.6)",
   },
   progressTrack: {
     width: "100%",
@@ -404,11 +395,6 @@ const styles = StyleSheet.create({
   userInfoLeft: {
     flexDirection: 'row',
     alignItems: 'center',
-  },
-  userAvatar: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
   },
   userInitialsAvatar: {
     width: 40,

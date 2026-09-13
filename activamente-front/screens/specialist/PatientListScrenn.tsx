@@ -12,7 +12,7 @@ import {
 import { LinearGradient } from "expo-linear-gradient";
 import { MaterialCommunityIcons } from "@expo/vector-icons";
 import { useFonts } from "expo-font";
-import { router, useRouter } from "expo-router";
+import { useRouter } from "expo-router";
 import SpecialistNavbar from "../../components/SpecialistNavbar";
 import { getPatients, PatientListItem } from "../../services/patientService";
 import { routes } from "../../router/routes";
@@ -42,16 +42,6 @@ function PatientCard({
 
         <View style={styles.cardInfo}>
           <Text style={styles.cardName}>{patient.fullName}</Text>
-          {(patient.age != null || patient.lastActivity) && (
-            <Text style={styles.cardMeta}>
-              {[
-                patient.age != null ? `${patient.age} años` : null,
-                patient.lastActivity,
-              ]
-                .filter(Boolean)
-                .join(" · ")}
-            </Text>
-          )}
         </View>
 
         {patient.hasAlert && (
@@ -108,11 +98,7 @@ function PatientCard({
 
 // ─── Main Screen ──────────────────────────────────────────────────────────────
 
-export default function PatientListScreen({
-  navigation,
-}: {
-  navigation?: any;
-}) {
+export default function PatientListScreen() {
   const router = useRouter();
   const [patients, setPatients] = useState<PatientListItem[]>([]);
   const [query, setQuery] = useState("");
@@ -310,12 +296,6 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontFamily: "PromptBold",
     color: "#27695A",
-  },
-  cardMeta: {
-    fontSize: 12,
-    fontFamily: "PromptRegular",
-    color: "#27695A",
-    marginTop: 2,
   },
 
   // Alert badge

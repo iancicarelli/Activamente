@@ -40,11 +40,7 @@ const formatRut = (value: string) => {
   return `${body}-${dv}`;
 };
 
-export default function AssignPatientScreen({
-  navigation,
-}: {
-  navigation?: any;
-}) {
+export default function AssignPatientScreen() {
   const router = useRouter();
   
   // Estados para el flujo
@@ -89,7 +85,7 @@ export default function AssignPatientScreen({
     try {
       await assignPatientToSpecialist(foundPatient.rut);
       Alert.alert("Éxito", "Paciente asignado correctamente a tu lista.", [
-        { text: "OK", onPress: () => (navigation?.goBack ? navigation.goBack() : router.back()) },
+        { text: "OK", onPress: () => router.back() },
       ]);
     } catch (err: any) {
       Alert.alert("Error", "Ocurrió un problema al asignar el paciente.");

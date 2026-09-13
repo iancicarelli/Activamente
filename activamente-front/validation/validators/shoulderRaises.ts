@@ -20,7 +20,7 @@ import {
   ValidatorResult,
   ValidatorState,
 } from '../types';
-import { calcularAngulo, distanciaY } from '../geometry';
+import { calcularAngulo } from '../geometry';
 import {
   LEFT_ELBOW,
   LEFT_HIP,
@@ -49,18 +49,13 @@ const ELBOW_STRAIGHT_ANGLE = 150;
 // Diferencia máxima permitida entre el ángulo del brazo izquierdo y derecho
 const ARM_SYMMETRY_TOLERANCE = 25;
 
-// Diferencia vertical máxima entre hombros (detecta inclinación lateral del tronco)
-const SHOULDER_ALIGN_TOLERANCE = 0.05;
-
 type LevelTarget = {
   minAngle: number;
-  successMsg: string;
 };
 
 const LEVEL_TARGETS: Record<number, LevelTarget> = {
   1: {
     minAngle: 85,
-    successMsg: '¡Nivel 1 alcanzado!',
   },
 };
 

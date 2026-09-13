@@ -1,24 +1,29 @@
 from uuid import UUID
 from pydantic import BaseModel
 from typing import Optional
+from datetime import datetime
 
-# Aceptamos cualquier UUID válido, no solo v4. Mismo criterio que routine_schema.py.
-UUID4 = UUID
+from app.schemas.session_exercise_schema import SessionExerciseResponse
 
-class SessionExerciseUpdate(BaseModel):
-    series_completed: int
-    reps_completed: int
-    accuracy_score: Optional[float] = None
-    feedback: Optional[str] = None
 
-class SessionExerciseResponse(BaseModel):
-    id: UUID4
-    session_id: UUID4
-    exercise_id: str
-    series_completed: int
-    reps_completed: int
-    accuracy_score: Optional[float] = None
-    feedback: Optional[str] = None
-    
+
+class SessionCreate(BaseModel):
+    patient_id: UUID
+    routine_id: UUID
+    duration_minutes: Optional[int] = None
+
+
+class SessionResponse(BaseModel):
+    id: UUID
+    patient_id: Optional[UUID] = None
+    routine_id: Optional[UUID] = None
+    date: Optional[datetime] = None
+    duration_minutes: Optional[int] = None
+    is_completed: Optional[bool] = None
+    # Ejercicios de la sesión (uno por routine_exercise de la rutina). POST
+    # /api/sessions los crea e incluye sus ids reales aquí para que el frontend
+    # pueda hacer el PUT de progreso. /complete devuelve la lista por defecto.
+    session_exercises: list[SessionExerciseResponse] = []
+
     class Config:
         from_attributes = True

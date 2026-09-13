@@ -21,8 +21,3 @@ class TokenResponse(BaseModel):
     role: UserRole
     user_id: UUID
     patient: Optional[PatientResponse] = None
-
-
-class TokenPayload(BaseModel):
-    sub: str        # user UUID as string
-    role: UserRole

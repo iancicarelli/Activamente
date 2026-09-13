@@ -12,7 +12,7 @@ from datetime import datetime, timedelta
 
 from sqlalchemy.orm import Session
 
-from app.models.session import Session as SessionModel
+from app.models.session_model import Session as SessionModel
 from app.models.survey_model import Survey
 from app.models.routine_model import Routine
 from app.schemas.patient_schema import ComplianceMetrics, SessionItem

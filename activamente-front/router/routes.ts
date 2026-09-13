@@ -19,6 +19,5 @@ export const routes = {
   adminUsers: "/admin-users",
   adminProfile: "/admin-profile",
   createUser: "/create-user",
-  exercisesLibrary: "/exercises-library",
   createRutine: "/create-rutine",
 };

@@ -9,7 +9,7 @@ from app.core.deps import require_specialist
 from app.models.user_model import User
 from app.models.specialist_model import Specialist
 from app.models.specialist_patient_model import SpecialistPatient
-from app.models.session import Session as SessionModel
+from app.models.session_model import Session as SessionModel
 from app.services.patient_metrics import get_patient_alert, get_patient_metrics_and_sessions
 from app.schemas.specialist_schema import (
     SpecialistDashboardResponse,

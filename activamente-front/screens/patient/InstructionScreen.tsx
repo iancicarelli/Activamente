@@ -226,12 +226,6 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     padding: 6,
   },
-  videoCardText: {
-    fontFamily: "PromptBold",
-    fontSize: 22,
-    color: "#27695A",
-    marginTop: 10,
-  },
   exerciseName: {
     fontFamily: "PromptBold",
     fontSize: 32,

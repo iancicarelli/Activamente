@@ -92,7 +92,6 @@ const PHASE_CONFIRM_FRAMES = 2;
 
 type LevelTarget = {
   reached: (lms: Landmark[]) => boolean;
-  successMsg: string;
 };
 
 // Solo existe el nivel 1: las muñecas deben alcanzar la altura de las rodillas
@@ -104,7 +103,6 @@ const LEVEL_TARGETS: Record<number, LevelTarget> = {
       const kneeY = (lms[LEFT_KNEE].y + lms[RIGHT_KNEE].y) / 2;
       return wristY >= kneeY;
     },
-    successMsg: '¡Nivel 1 alcanzado!',
   },
 };
 

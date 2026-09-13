@@ -1,4 +1,4 @@
-from datetime import date as date_type, datetime, time as time_type
+from datetime import date as date_type, datetime
 from typing import Optional
 from uuid import UUID
 

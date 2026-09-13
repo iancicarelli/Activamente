@@ -46,8 +46,6 @@ export interface Patient {
 export interface PatientListItem {
   id: string;
   fullName: string;
-  age?: number;
-  lastActivity?: string; // p.ej. "Hoy, 10:00" | "Hace 5 días"
   hasAlert: boolean;
   alertMessage?: string;
 }

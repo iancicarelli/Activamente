@@ -1,4 +1,4 @@
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel
 from typing import Optional, List
 from datetime import datetime
 
@@ -23,23 +23,6 @@ class PatientListResponse(BaseModel):
     hasAlert: bool = False
     alertMessage: Optional[str] = None
     
-    model_config = {"from_attributes": True}
-
-
-class PatientBase(BaseModel):
-    first_name: str
-    last_name: str
-    email: EmailStr
-
-
-class PatientCreate(PatientBase):
-    password: str
-
-
-class PatientCreateResponse(PatientBase):
-    id: str
-    role: str
-
     model_config = {"from_attributes": True}
 
 

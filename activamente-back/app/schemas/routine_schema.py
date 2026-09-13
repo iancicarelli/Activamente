@@ -4,10 +4,6 @@ from uuid import UUID
 
 from pydantic import BaseModel
 
-# Aceptamos cualquier UUID válido, no solo v4. Los ids generados por
-# gen_random_uuid() son v4, pero datos sembrados/importados pueden usar otras
-# versiones y seguir siendo UUIDs válidos.
-UUID4 = UUID
 
 
 class RoutineExerciseCreate(BaseModel):
@@ -21,7 +17,7 @@ class RoutineExerciseCreate(BaseModel):
 
 
 class RoutineCreate(BaseModel):
-    patient_id: UUID4
+    patient_id: UUID
     name: str
     start_date: date
     end_date: date
@@ -31,9 +27,9 @@ class RoutineCreate(BaseModel):
 
 
 class RoutineResponse(BaseModel):
-    id: UUID4
-    specialist_id: UUID4
-    patient_id: UUID4
+    id: UUID
+    specialist_id: UUID
+    patient_id: UUID
     name: str
     start_date: date
     end_date: date
@@ -45,7 +41,7 @@ class RoutineResponse(BaseModel):
 
 
 class RoutineExerciseResponse(BaseModel):
-    id: UUID4
+    id: UUID
     exercise_id: str
     order_index: int
     level: int

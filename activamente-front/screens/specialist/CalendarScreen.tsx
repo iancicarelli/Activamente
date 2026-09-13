@@ -11,7 +11,7 @@ import { MaterialCommunityIcons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
 import { useFonts } from "expo-font";
 import { useLocalSearchParams } from "expo-router";
-import { getAppointmentsByDate, Appointment } from "../../services/calendarService";
+import { getAppointmentsByDate, Appointment } from "../../services/appointmentService";
 import SpecialistNavbar from "../../components/SpecialistNavbar";
 
 // ─── Helpers del Calendario ───────────────────────────────────────────────────
