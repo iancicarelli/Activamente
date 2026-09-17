@@ -8,7 +8,8 @@ import { Platform, StyleSheet, Text, TouchableOpacity, View } from "react-native
 import DateTimePicker, { DateTimePickerEvent } from "@react-native-community/datetimepicker";
 import { MaterialCommunityIcons } from "@expo/vector-icons";
 import { useLocalSearchParams, useRouter } from "expo-router";
-import { Screen, Banner, Card, Button, Field, InlineError, KeyboardAwareScrollView, LoadingView, ErrorView, SectionTitle, useToast } from "../../components/ui";
+import { Screen, Banner, Card, Button, Field, Badge, InlineError, KeyboardAwareScrollView, LoadingView, ErrorView, SectionTitle, useToast } from "../../components/ui";
+import { isBetaExercise } from "../../validation/validators/exerciseRegistry";
 import { Colors, Fonts, FontSize, Radius } from "../../constants/theme";
 import { getExercises, Exercise } from "../../services/exerciseService";
 import { createRoutine, getRoutineById, updateRoutine, RoutineCreate, RoutineWithExercises } from "../../services/routineService";
@@ -255,7 +256,10 @@ export default function CreateRoutineScreen() {
                 return (
                   <View key={ex.id} style={styles.libraryRow}>
                     <View style={{ flex: 1 }}>
-                      <Text style={styles.libraryName}>{ex.name}</Text>
+                      <View style={styles.libraryTitleRow}>
+                        <Text style={styles.libraryName}>{ex.name}</Text>
+                        {isBetaExercise(ex.id) ? <Badge label="Beta" tone="warning" icon="flask-outline" /> : null}
+                      </View>
                       {ex.description ? <Text style={styles.libraryDesc}>{ex.description}</Text> : null}
                     </View>
                     <Button title={added ? "Agregado" : "Agregar"} icon={added ? "check" : "plus"} size="sm" variant="teal" onPress={() => add(ex)} disabled={added} />
@@ -367,6 +371,7 @@ const styles = StyleSheet.create({
   dayText: { fontSize: FontSize.sm, fontFamily: Fonts.regular, color: Colors.textPrimary },
   dayTextActive: { fontFamily: Fonts.bold, color: Colors.textOnDark },
   libraryRow: { flexDirection: "row", alignItems: "center", gap: 10, paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: Colors.divider },
+  libraryTitleRow: { flexDirection: "row", alignItems: "center", gap: 8, flexWrap: "wrap" },
   libraryName: { fontSize: FontSize.md, fontFamily: Fonts.bold, color: Colors.textPrimary },
   libraryDesc: { fontSize: FontSize.sm, fontFamily: Fonts.regular, color: Colors.textSecondary, marginTop: 2 },
   builder: { backgroundColor: Colors.cardBgAlt, borderRadius: 12, padding: 12, marginBottom: 12 },

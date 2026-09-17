@@ -16,13 +16,13 @@ import {
   LEFT_HIP,
   LEFT_KNEE,
   LEFT_SHOULDER,
-  MIN_VISIBILITY,
   RIGHT_ANKLE,
   RIGHT_HIP,
   RIGHT_KNEE,
   RIGHT_SHOULDER,
+  LOWER_BODY_INDICES,
 } from "../landmarkIndices";
-import { createPhaseMachine, createStabilizedValidator } from "../stabilize";
+import { allVisible, createPhaseMachine, createStabilizedValidator } from "../stabilize";
 
 const LEFT_INDICES = [LEFT_SHOULDER, LEFT_HIP, LEFT_KNEE, LEFT_ANKLE];
 const RIGHT_INDICES = [RIGHT_SHOULDER, RIGHT_HIP, RIGHT_KNEE, RIGHT_ANKLE];
@@ -40,7 +40,7 @@ type Leg = { shoulder: number; hip: number; knee: number; ankle: number };
 const LEFT: Leg = { shoulder: LEFT_SHOULDER, hip: LEFT_HIP, knee: LEFT_KNEE, ankle: LEFT_ANKLE };
 const RIGHT: Leg = { shoulder: RIGHT_SHOULDER, hip: RIGHT_HIP, knee: RIGHT_KNEE, ankle: RIGHT_ANKLE };
 
-const legVisible = (lms: Landmark[], idx: number[]) => idx.every((i) => lms[i] && lms[i].visibility >= MIN_VISIBILITY);
+const legVisible = (lms: Landmark[], idx: number[]) => allVisible(lms, idx);
 
 const hipAngleOf = (lms: Landmark[], leg: Leg) => calcularAngulo(lms[leg.shoulder], lms[leg.hip], lms[leg.knee]);
 
@@ -91,5 +91,9 @@ function buildValidator(level: number) {
 export const legRaiseValidator: ExerciseValidator = {
   id: "leg_raise",
   maxLevel: 3,
+  framingIndices: [LEFT_SHOULDER, RIGHT_SHOULDER, ...LOWER_BODY_INDICES],
+  view: "side",
+  // En pruebas (2026-09-17): en el dispositivo no se logra validar; se reemplazará por otro ejercicio.
+  beta: true,
   levels: { 1: buildValidator(1), 2: buildValidator(2), 3: buildValidator(3) },
 };

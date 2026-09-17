@@ -17,7 +17,7 @@ import {
   ValidatorResult,
   ValidatorState,
 } from "./types";
-import { MIN_VISIBILITY } from "./landmarkIndices";
+import { isTrackable } from "./landmarkIndices";
 
 export function smooth(state: ValidatorState, key: string, value: number, window: number): number {
   const buf = state.buffers[key] ?? (state.buffers[key] = []);
@@ -64,12 +64,32 @@ export function createPhaseMachine({ standingEnter, standingExit, standingIs }: 
   };
 }
 
+// Visibilidad DURANTE el ejercicio (isTrackable, con histéresis respecto al encuadre).
 export function allVisible(lms: Landmark[], indices: number[]): boolean {
-  for (const idx of indices) {
-    const lm = lms[idx];
-    if (!lm || lm.visibility < MIN_VISIBILITY) return false;
-  }
+  for (const idx of indices) if (!isTrackable(lms[idx], idx)) return false;
   return true;
+}
+
+export type Side = "left" | "right" | "both" | "none";
+
+// Qué lado(s) del cuerpo se pueden usar. De perfil, el lado lejano casi nunca
+// pasa el umbral; de frente, un giro leve o el brazo tapando la pierna pueden
+// ocultar un lado. Los validadores miden con el lado visible o promedian ambos.
+export function visibleSide(lms: Landmark[], left: number[], right: number[]): Side {
+  const l = allVisible(lms, left);
+  const r = allVisible(lms, right);
+  if (l && r) return "both";
+  if (l) return "left";
+  if (r) return "right";
+  return "none";
+}
+
+// Evalúa `fn` con el lado visible; con ambos, promedia. Con "none" usa el izquierdo
+// (los validadores ya devolvieron el mensaje de visibilidad antes de llegar aquí).
+export function sidedValue(side: Side, fn: (side: "left" | "right") => number): number {
+  if (side === "right") return fn("right");
+  if (side === "both") return (fn("left") + fn("right")) / 2;
+  return fn("left");
 }
 
 export type StabilizedConfig = {

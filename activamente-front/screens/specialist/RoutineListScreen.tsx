@@ -10,6 +10,7 @@ import { routes } from "../../router/routes";
 import { deleteRoutine, getRoutinesByPatient, RoutineWithExercises } from "../../services/routineService";
 import { formatNumericDate, formatTime24, formatWeekdays, toDateString } from "../../utils/dates";
 import { getErrorMessage } from "../../utils/errors";
+import { isBetaExercise } from "../../validation/validators/exerciseRegistry";
 
 const isCurrent = (r: RoutineWithExercises) => {
   const today = toDateString(new Date());
@@ -44,7 +45,7 @@ function RoutineCard({ routine, deleting, onEdit, onDelete }: { routine: Routine
       <View style={styles.exercises}>
         {routine.exercises.map((e) => (
           <Text key={e.id} style={styles.exercise}>
-            • {e.exercise_id.replace(/_/g, " ")} · nivel {e.level} · {e.total_series}×{e.total_reps}
+            • {e.exercise_id.replace(/_/g, " ")}{isBetaExercise(e.exercise_id) ? " (beta)" : ""} · nivel {e.level} · {e.total_series}×{e.total_reps}
             {e.rest_time_seconds ? ` · descanso ${e.rest_time_seconds} s` : ""}
           </Text>
         ))}

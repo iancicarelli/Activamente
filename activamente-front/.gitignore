@@ -11,3 +11,6 @@ android/.gradle/
 android/app/build/
 android/app/.cxx/
 .DS_Store
+
+# Logs de ejercicio bajados del dispositivo (scripts/pull-logs.sh)
+validation/__logs__/

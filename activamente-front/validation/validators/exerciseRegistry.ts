@@ -8,7 +8,7 @@
  *  1. Crear `validation/validators/<nombre>.ts` usando `createStabilizedValidator`
  *     (ver toeTouch.ts como plantilla): visibilidad → métrica → nivel → máquina
  *     de fases con histéresis → reglas de forma → feedback por fase.
- *  2. Exportar un `ExerciseValidator` { id, maxLevel, levels: {1,2,3} }.
+ *  2. Exportar un `ExerciseValidator` { id, maxLevel, levels, framingIndices, view, beta? }.
  *  3. Agregarlo acá con la misma clave que `id`.
  *  4. Backend: fila en seed.sql (mismo slug, max_level) · video en assets/videos ·
  *     VIDEO_MAP en InstructionScreen · fixture en validation/__fixtures__.
@@ -35,3 +35,4 @@ export const exerciseRegistry: Record<string, ExerciseValidator> = {
 };
 
 export const maxLevelFor = (exerciseId: string): number => exerciseRegistry[exerciseId]?.maxLevel ?? 1;
+export const isBetaExercise = (exerciseId: string): boolean => exerciseRegistry[exerciseId]?.beta === true;

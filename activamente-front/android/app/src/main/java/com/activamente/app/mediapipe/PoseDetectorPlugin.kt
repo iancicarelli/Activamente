@@ -16,7 +16,8 @@ import java.nio.IntBuffer
 
 /**
  * VisionCamera frame processor plugin that runs MediaPipe PoseLandmarker
- * on every camera frame and returns 33 normalized landmarks.
+ * on every camera frame and returns { landmarks: 33 normalized landmarks,
+ * convMs, detMs, ts } (timings of this frame).
  *
  * Registered as "detectPose" — called from src/modules/PoseDetector.ts.
  */
@@ -89,16 +90,23 @@ class PoseDetectorPlugin(
             )
         }
 
-        val landmarks = result.landmarks().firstOrNull() ?: return emptyList<Any>()
-
-        return landmarks.map { lm ->
+        val landmarks = result.landmarks().firstOrNull()?.map { lm ->
             mapOf(
                 "x"          to lm.x().toDouble(),
                 "y"          to lm.y().toDouble(),
                 "z"          to lm.z().toDouble(),
                 "visibility" to (lm.visibility().orElse(0f).toDouble()),
             )
-        }
+        } ?: emptyList<Any>()
+
+        // Devuelve también los tiempos por frame para el HUD y el log de ejercicio
+        // (validation/exerciseLog.ts). JS acepta esta forma o la lista plana.
+        return mapOf(
+            "landmarks" to landmarks,
+            "convMs" to convMs,
+            "detMs" to detMs,
+            "ts" to timestampMs.toDouble(),
+        )
     }
 
     /**

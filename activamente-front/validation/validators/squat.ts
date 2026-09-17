@@ -8,19 +8,19 @@
  */
 
 import { ExerciseValidator, Landmark, ValidatorPhase } from "../types";
-import { calcularAngulo, distanciaY, promedio } from "../geometry";
+import { calcularAngulo, distanciaY } from "../geometry";
 import {
   LEFT_ANKLE,
   LEFT_HIP,
   LEFT_KNEE,
   LEFT_SHOULDER,
-  MIN_VISIBILITY,
   RIGHT_ANKLE,
   RIGHT_HIP,
   RIGHT_KNEE,
   RIGHT_SHOULDER,
+  LOWER_BODY_INDICES,
 } from "../landmarkIndices";
-import { createPhaseMachine, createStabilizedValidator } from "../stabilize";
+import { createPhaseMachine, createStabilizedValidator, sidedValue, visibleSide } from "../stabilize";
 
 const LEFT_INDICES = [LEFT_SHOULDER, LEFT_HIP, LEFT_KNEE, LEFT_ANKLE];
 const RIGHT_INDICES = [RIGHT_SHOULDER, RIGHT_HIP, RIGHT_KNEE, RIGHT_ANKLE];
@@ -34,24 +34,12 @@ const PHASE_CONFIRM_FRAMES = 2;
 
 const LEVEL_KNEE_ANGLE: Record<number, number> = { 1: 110, 2: 90, 3: 75 };
 
-type Side = "left" | "right" | "both" | "none";
-
-function visibleSide(lms: Landmark[]): Side {
-  const l = LEFT_INDICES.every((i) => lms[i] && lms[i].visibility >= MIN_VISIBILITY);
-  const r = RIGHT_INDICES.every((i) => lms[i] && lms[i].visibility >= MIN_VISIBILITY);
-  if (l && r) return "both";
-  if (l) return "left";
-  if (r) return "right";
-  return "none";
-}
+const side = (lms: Landmark[]) => visibleSide(lms, LEFT_INDICES, RIGHT_INDICES);
 
 function sided(lms: Landmark[], fn: (s: number, h: number, k: number, a: number) => number): number {
-  const side = visibleSide(lms);
-  const left = fn(LEFT_SHOULDER, LEFT_HIP, LEFT_KNEE, LEFT_ANKLE);
-  const right = fn(RIGHT_SHOULDER, RIGHT_HIP, RIGHT_KNEE, RIGHT_ANKLE);
-  if (side === "right") return right;
-  if (side === "both") return promedio(left, right);
-  return left;
+  return sidedValue(side(lms), (which) =>
+    which === "left" ? fn(LEFT_SHOULDER, LEFT_HIP, LEFT_KNEE, LEFT_ANKLE) : fn(RIGHT_SHOULDER, RIGHT_HIP, RIGHT_KNEE, RIGHT_ANKLE)
+  );
 }
 
 const kneeAngle = (lms: Landmark[]) => sided(lms, (_s, h, k, a) => calcularAngulo(lms[h], lms[k], lms[a]));
@@ -73,14 +61,14 @@ const PHASE_FEEDBACK: Record<ValidatorPhase, string> = {
 function buildValidator(level: number) {
   const target = LEVEL_KNEE_ANGLE[level] ?? LEVEL_KNEE_ANGLE[1];
   return createStabilizedValidator({
-    visibility: (lms) => (visibleSide(lms) === "none" ? "Ponte de perfil, que se vea de los hombros a los tobillos" : null),
+    visibility: (lms) => (side(lms) === "none" ? "Ponte de perfil, que se vea de los hombros a los tobillos" : null),
     metric: kneeAngle,
     levelReached: (_lms, knee) => knee <= target,
     machine,
     smoothWindow: SMOOTH_WINDOW,
     confirmFrames: PHASE_CONFIRM_FRAMES,
     formRules: (lms) => {
-      if (visibleSide(lms) === "both" && distanciaY(lms[LEFT_SHOULDER], lms[RIGHT_SHOULDER]) > BACK_ALIGN_TOLERANCE) {
+      if (side(lms) === "both" && distanciaY(lms[LEFT_SHOULDER], lms[RIGHT_SHOULDER]) > BACK_ALIGN_TOLERANCE) {
         return "Mantén los hombros alineados";
       }
       if (hipAngle(lms) < MIN_HIP_ANGLE) return "Mantén la espalda más recta al bajar";
@@ -95,5 +83,7 @@ function buildValidator(level: number) {
 export const squatValidator: ExerciseValidator = {
   id: "squat",
   maxLevel: 3,
+  framingIndices: [LEFT_SHOULDER, RIGHT_SHOULDER, ...LOWER_BODY_INDICES],
+  view: "side",
   levels: { 1: buildValidator(1), 2: buildValidator(2), 3: buildValidator(3) },
 };

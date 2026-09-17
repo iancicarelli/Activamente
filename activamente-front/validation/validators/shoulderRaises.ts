@@ -18,6 +18,7 @@ import {
   RIGHT_HIP,
   RIGHT_SHOULDER,
   RIGHT_WRIST,
+  UPPER_BODY_INDICES,
 } from "../landmarkIndices";
 import { allVisible, createPhaseMachine, createStabilizedValidator } from "../stabilize";
 
@@ -75,5 +76,7 @@ function buildValidator(level: number) {
 export const shoulderRaisesValidator: ExerciseValidator = {
   id: "shoulder_raises",
   maxLevel: 3,
+  framingIndices: UPPER_BODY_INDICES,
+  view: "front",
   levels: { 1: buildValidator(1), 2: buildValidator(2), 3: buildValidator(3) },
 };

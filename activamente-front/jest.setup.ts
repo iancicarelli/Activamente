@@ -34,6 +34,20 @@ jest.mock("expo-haptics", () => ({
   NotificationFeedbackType: { Success: "success", Warning: "warning", Error: "error" },
 }));
 jest.mock("expo-keep-awake", () => ({ useKeepAwake: jest.fn() }));
+jest.mock("expo-file-system", () => {
+  class Directory {
+    uri = "file:///mock/";
+    create() {}
+    list() {
+      return [];
+    }
+  }
+  class File {
+    uri = "file:///mock/file.json";
+    write = jest.fn();
+  }
+  return { Directory, File, Paths: { document: new Directory(), cache: new Directory() } };
+});
 jest.mock("expo-splash-screen", () => ({ preventAutoHideAsync: jest.fn(async () => {}), hideAsync: jest.fn(async () => {}) }));
 jest.mock("expo-font", () => ({ useFonts: () => [true, null], isLoaded: () => true, loadAsync: jest.fn(async () => {}) }));
 jest.mock("expo-linear-gradient", () => {

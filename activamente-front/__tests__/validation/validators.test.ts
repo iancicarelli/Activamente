@@ -16,6 +16,7 @@ const cases: { id: string; level: number; frame: (t: number) => Landmark[]; edge
   { id: "squat", level: 1, frame: (t) => P.squat(P.lerp(178, 100, t)), edge: (t) => P.squat(P.lerp(178, 154, t)) },
   { id: "squat", level: 3, frame: (t) => P.squat(P.lerp(178, 70, t)), edge: (t) => P.squat(P.lerp(178, 154, t)) },
   { id: "toe_touch", level: 1, frame: (t) => P.toeTouch(P.lerp(175, 95, t)), edge: (t) => P.toeTouch(P.lerp(175, 150, t)) },
+  { id: "toe_touch", level: 2, frame: (t) => P.toeTouch(P.lerp(175, 95, t), P.lerp(0.6, 0.94, t)), edge: (t) => P.toeTouch(P.lerp(175, 150, t)) },
   { id: "shoulder_raises", level: 1, frame: (t) => P.shoulderRaise(P.lerp(25, 95, t)), edge: (t) => P.shoulderRaise(P.lerp(25, 53, t)) },
   { id: "shoulder_raises", level: 3, frame: (t) => P.shoulderRaise(P.lerp(25, 150, t)), edge: (t) => P.shoulderRaise(P.lerp(25, 53, t)) },
   { id: "leg_raise", level: 1, frame: (t) => P.legRaise(P.lerp(178, 140, t)), edge: (t) => P.legRaise(P.lerp(178, 160, t)) },
@@ -73,11 +74,12 @@ describe("niveles", () => {
     expect(run("shoulder_raises", 3, seq).reps).toBe(0);
   });
 
-  test("toe touch: nivel 3 exige muñecas a los tobillos", () => {
+  test("toe touch: nivel 2 exige muñecas a los tobillos (solo hay 2 niveles)", () => {
     const knees = (t: number) => P.toeTouch(P.lerp(175, 95, t), P.lerp(0.6, 0.8, t));
     const ankles = (t: number) => P.toeTouch(P.lerp(175, 95, t), P.lerp(0.6, 0.94, t));
-    expect(run("toe_touch", 3, P.repSequence(3, knees)).reps).toBe(0);
-    expect(run("toe_touch", 3, P.repSequence(3, ankles)).reps).toBe(3);
+    expect(exerciseRegistry.toe_touch.maxLevel).toBe(2);
+    expect(run("toe_touch", 2, P.repSequence(3, knees)).reps).toBe(0);
+    expect(run("toe_touch", 2, P.repSequence(3, ankles)).reps).toBe(3);
   });
 
   test("maxLevel expuesto por cada validador", () => {

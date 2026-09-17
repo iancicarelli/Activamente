@@ -13,6 +13,7 @@ import { Colors, Fonts, FontSize } from "../../constants/theme";
 import { routes } from "../../router/routes";
 import { buildExercisePlan, useSessionPlan } from "../../hooks/useSessionPlan";
 import { splitSentences } from "../../utils/text";
+import { isBetaExercise } from "../../validation/validators/exerciseRegistry";
 
 const VIDEO_MAP: Record<string, any> = {
   toe_touch: require("../../assets/videos/toe_touch.mp4"),
@@ -111,7 +112,7 @@ export default function InstructionScreen() {
     <Screen>
       <Banner
         title={exercise ? `Ejercicio ${index + 1} de ${exercise.totalExercises}` : "Ejercicio"}
-        subtitle={preview ? "Modo repaso" : undefined}
+        subtitle={[preview ? "Modo repaso" : null, exercise && isBetaExercise(exercise.exerciseId) ? "Ejercicio en pruebas (Beta)" : null].filter(Boolean).join(" · ") || undefined}
         big
         showBack
         onBack={exit}

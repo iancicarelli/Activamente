@@ -54,4 +54,10 @@ export type ExerciseValidator = {
   id: string;
   levels: Record<number, ValidatorFn>;
   maxLevel: number;
+  // Landmarks que deben verse antes de empezar (pantalla de encuadre).
+  framingIndices: number[];
+  // Vista que se le pide al paciente en el encuadre.
+  view: "front" | "side";
+  // Ejercicio en pruebas: se muestra "Beta" al especialista y al paciente.
+  beta?: boolean;
 };

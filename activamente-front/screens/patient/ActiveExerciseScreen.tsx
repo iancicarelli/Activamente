@@ -3,13 +3,19 @@
 // Usa la rutina REAL (HC-01/HC-02): nivel, series, reps y descanso vienen de
 // useSessionPlan; el flujo (countdown → activo → descanso → siguiente serie →
 // fin del ejercicio) lo lleva useExerciseSession (EX-10). Además:
-//   - cuenta regresiva 3-2-1 con guía de encuadre, contador enorme, voz
+//   - encuadre guiado antes de empezar (EX-51: no arranca hasta que se ven los
+//     puntos que usa el ejercicio; avisos "aléjate…" según nariz/tobillos), el
+//     preview no queda tapado por los paneles y el esqueleto respeta el recorte
+//     de la cámara,
+//   - cuenta regresiva 3-2-1, contador enorme, voz
 //     (expo-speech) y vibración (expo-haptics) por rep (UX-12),
 //   - feedback estable ≥ 1.5 s (EX-33), pausa real (BT-01), descanso con
 //     "Saltar", salida con confirmación (BT-02), pantalla siempre encendida,
 //   - persistencia por serie y al salir con reintento (EX-11), accuracy y
 //     feedback por rep (EX-35 / EP-15),
-//   - HUD de rendimiento y grabador de fixtures solo en __DEV__ (EX-03 / EX-34).
+//   - HUD de rendimiento (encendido por defecto), log automático de cada
+//     ejercicio (validation/exerciseLog.ts) y grabador de fixtures, solo en
+//     __DEV__ (EX-03 / EX-34).
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { LayoutChangeEvent, Share, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { MaterialCommunityIcons } from "@expo/vector-icons";
@@ -30,11 +36,13 @@ import { useStableFeedback } from "../../hooks/useStableFeedback";
 import { updateExerciseProgress } from "../../services/sessionService";
 import { useExerciseValidator } from "../../validation/useExerciseValidator";
 import { RepQualityTracker } from "../../validation/quality";
-import { Landmark } from "../../validation/types";
-import { BODY_INDICES } from "../../validation/landmarkIndices";
-import { allVisible } from "../../validation/stabilize";
+import { assessFraming, framingIndicesFor, viewFor, FramingStatus } from "../../validation/framing";
+import { isBetaExercise } from "../../validation/validators/exerciseRegistry";
+import { ExerciseLogger, parsePluginResult } from "../../validation/exerciseLog";
 
 const FRAME_INTERVAL = 3; // procesa 1 de cada 3 frames
+const FRAMING_HOLD_MS = 1200; // encuadre correcto sostenido antes de arrancar
+const FRAMING_SKIP_AFTER_MS = 12000; // pasado esto se ofrece "Empezar igual"
 const RETRY_DELAY_MS = 4000;
 const MAX_RECORD_FRAMES = 1200;
 
@@ -85,7 +93,8 @@ export default function ActiveExerciseScreen() {
 
 // ─── Pantalla real ───────────────────────────────────────────────────────────
 
-type HudStats = { fps: number; jsMs: number; phase: string; metrics: Record<string, number> };
+type HudStats = { fps: number; jsMs: number; convMs: number; detMs: number; phase: string; metrics: Record<string, number>; logFrames: number };
+const EMPTY_HUD: HudStats = { fps: 0, jsMs: 0, convMs: 0, detMs: 0, phase: "", metrics: {}, logFrames: 0 };
 
 function ActiveExercise({ exercise, sessionId }: { exercise: ExercisePlan; sessionId: string }) {
   useKeepAwake();
@@ -96,14 +105,33 @@ function ActiveExercise({ exercise, sessionId }: { exercise: ExercisePlan; sessi
   const format = useCameraFormat(device, [{ videoResolution: { width: 640, height: 480 } }]);
 
   const [cameraSize, setCameraSize] = useState({ width: 0, height: 0 });
+  const [panels, setPanels] = useState({ top: 0, bottom: 0 });
   const [saveError, setSaveError] = useState<string | null>(null);
-  const [visible, setVisible] = useState(false);
-  const [hud, setHud] = useState<HudStats | null>(null);
+  const [framing, setFraming] = useState<FramingStatus>({ ok: false, message: "Buscando tu cuerpo…", hint: null });
+  const [framed, setFramed] = useState(false);
+  const [canSkipFraming, setCanSkipFraming] = useState(false);
+  const framingOkSince = useRef<number | null>(null);
+  const framingIndices = useMemo(() => framingIndicesFor(exercise.exerciseId), [exercise.exerciseId]);
+  const frameAspect = format ? Math.min(format.videoWidth, format.videoHeight) / Math.max(format.videoWidth, format.videoHeight) : 0.75;
+  const [hud, setHud] = useState<HudStats | null>(__DEV__ ? EMPTY_HUD : null);
   const [recording, setRecording] = useState(false);
 
   const skeletonRef = useRef<PoseSkeletonHandle>(null);
   const quality = useRef(new RepQualityTracker()).current;
   const { feedback, push: pushFeedback, reset: resetFeedback } = useStableFeedback();
+
+  // Log automático del ejercicio (solo dev): un archivo por ejercicio, se escribe
+  // al cerrar cada serie, al terminar y al salir.
+  const logger = useRef<ExerciseLogger | null>(null);
+  if (__DEV__ && logger.current === null) {
+    logger.current = new ExerciseLogger({
+      exerciseId: exercise.exerciseId,
+      level: exercise.level,
+      totalSeries: exercise.totalSeries,
+      totalReps: exercise.totalReps,
+      sessionId,
+    });
+  }
 
   // ── Persistencia con reintento (EX-11) ──
   const pendingRef = useRef<{ series: number; reps: number; final: boolean } | null>(null);
@@ -140,6 +168,7 @@ function ActiveExercise({ exercise, sessionId }: { exercise: ExercisePlan; sessi
   useEffect(() => () => {
     if (retryTimer.current) clearTimeout(retryTimer.current);
     Speech.stop();
+    logger.current?.flush("unmount");
   }, []);
 
   // ── Navegación al terminar ──
@@ -149,6 +178,8 @@ function ActiveExercise({ exercise, sessionId }: { exercise: ExercisePlan; sessi
     navigatingRef.current = true;
     speak("¡Muy bien! Ejercicio terminado");
     buzz("done");
+    logger.current?.event("exerciseDone", { series: state.seriesCompleted, reps: state.totalRepsDone });
+    logger.current?.flush("exerciseDone");
     await persist(state.seriesCompleted, state.totalRepsDone, true);
     if (exercise.exerciseIdx + 1 < exercise.totalExercises) {
       router.replace({ pathname: routes.instruction, params: { sessionId, index: String(exercise.exerciseIdx + 1) } });
@@ -159,6 +190,8 @@ function ActiveExercise({ exercise, sessionId }: { exercise: ExercisePlan; sessi
 
   const session = useExerciseSession(exercise, {
     onSeriesDone: (series, reps) => {
+      logger.current?.event("seriesDone", { series, reps });
+      logger.current?.flush("seriesDone");
       void persist(series, reps);
     },
     onExerciseDone: (state) => {
@@ -172,10 +205,16 @@ function ActiveExercise({ exercise, sessionId }: { exercise: ExercisePlan; sessi
   // Validador: se resetea entero al empezar cada serie (EX-06).
   const validator = useExerciseValidator(exercise.exerciseId, exercise.level, `${exercise.exerciseIdx}-${state.series}`);
 
-  // Arranque automático con permiso de cámara.
+  // Arranque automático cuando hay permiso y el encuadre está bien (o se saltó).
   useEffect(() => {
-    if (hasPermission && state.phase === "idle") session.start();
-  }, [hasPermission, state.phase, session]);
+    if (hasPermission && state.phase === "idle" && framed) session.start();
+  }, [hasPermission, state.phase, framed, session]);
+
+  useEffect(() => {
+    if (state.phase !== "idle") return;
+    const t = setTimeout(() => setCanSkipFraming(true), FRAMING_SKIP_AFTER_MS);
+    return () => clearTimeout(t);
+  }, [state.phase]);
 
   // Voz por fase.
   const lastSpoken = useRef<string>("");
@@ -193,10 +232,11 @@ function ActiveExercise({ exercise, sessionId }: { exercise: ExercisePlan; sessi
 
   useEffect(() => {
     if (state.phase !== "active") resetFeedback();
-  }, [state.phase, resetFeedback]);
+    logger.current?.event("sessionPhase", { phase: state.phase, series: state.series, reps: state.reps });
+  }, [state.phase, state.series, resetFeedback, state.reps]);
 
   // ── HUD / grabador (solo dev) ──
-  const hudRef = useRef({ frames: 0, jsMs: 0, windowStart: Date.now(), phase: "", metrics: {} as Record<string, number> });
+  const hudRef = useRef({ frames: 0, jsMs: 0, convMs: 0, detMs: 0, windowStart: Date.now(), phase: "", metrics: {} as Record<string, number> });
   const recordRef = useRef<{ t: number; lms: number[][] }[]>([]);
   const recordingRef = useRef(false);
 
@@ -221,7 +261,8 @@ function ActiveExercise({ exercise, sessionId }: { exercise: ExercisePlan; sessi
 
   // ── Callback JS por frame ──
   const onLandmarksDetected = useCallback(
-    (lms: Landmark[]) => {
+    (raw: unknown) => {
+      const { lms, native } = parsePluginResult(raw);
       skeletonRef.current?.update(lms);
       const s = stateRef.current;
 
@@ -229,22 +270,40 @@ function ActiveExercise({ exercise, sessionId }: { exercise: ExercisePlan; sessi
         recordRef.current.push({ t: Date.now(), lms: lms.map((l) => [+l.x.toFixed(3), +l.y.toFixed(3), +l.z.toFixed(3), +l.visibility.toFixed(2)]) });
       }
 
-      if (s.phase === "countdown") {
-        setVisible(lms.length > 0 && allVisible(lms, BODY_INDICES));
+      if (s.phase === "idle") {
+        const status = assessFraming(lms, framingIndices);
+        setFraming((prev) => (prev.ok === status.ok && prev.message === status.message && prev.hint === status.hint ? prev : status));
+        const now = Date.now();
+        if (!status.ok) framingOkSince.current = null;
+        else if (framingOkSince.current === null) framingOkSince.current = now;
+        else if (now - framingOkSince.current >= FRAMING_HOLD_MS) {
+          logger.current?.event("framed", {});
+          setFramed(true);
+        }
+        logger.current?.frame({ lms, native, sessionPhase: s.phase });
         return;
       }
-      if (s.phase !== "active") return;
+      if (s.phase === "countdown") {
+        logger.current?.frame({ lms, native, sessionPhase: s.phase });
+        return;
+      }
+      if (s.phase !== "active") {
+        logger.current?.frame({ lms, native, sessionPhase: s.phase });
+        return;
+      }
 
       const t0 = Date.now();
       const result = validator.evaluate(lms);
       const jsMs = Date.now() - t0;
       quality.frame(result);
+      logger.current?.frame({ lms, native, sessionPhase: s.phase, jsMs, result });
 
       if (lms.length === 0) pushFeedback({ text: "No te vemos. Ponte frente a la cámara", ok: false });
       else pushFeedback({ text: result.feedback, ok: result.ok }, result.repCompleted);
 
       if (result.repCompleted) {
         const n = s.reps + 1;
+        logger.current?.event("rep", { n, series: s.series });
         session.rep();
         speak(n >= exercise.totalReps ? `${n}. ¡Serie completa!` : String(n));
         buzz("rep");
@@ -254,6 +313,10 @@ function ActiveExercise({ exercise, sessionId }: { exercise: ExercisePlan; sessi
         const h = hudRef.current;
         h.frames += 1;
         h.jsMs = h.jsMs * 0.8 + jsMs * 0.2;
+        if (native) {
+          h.convMs = h.convMs * 0.8 + native.convMs * 0.2;
+          h.detMs = h.detMs * 0.8 + native.detMs * 0.2;
+        }
         h.phase = result.phase;
         h.metrics = result.metrics ?? {};
         const now = Date.now();
@@ -261,11 +324,15 @@ function ActiveExercise({ exercise, sessionId }: { exercise: ExercisePlan; sessi
           const fps = h.frames / ((now - h.windowStart) / 1000);
           h.frames = 0;
           h.windowStart = now;
-          setHud((prev) => (prev ? { fps: +fps.toFixed(1), jsMs: +h.jsMs.toFixed(1), phase: h.phase, metrics: h.metrics } : prev));
+          setHud((prev) =>
+            prev
+              ? { fps: +fps.toFixed(1), jsMs: +h.jsMs.toFixed(1), convMs: +h.convMs.toFixed(0), detMs: +h.detMs.toFixed(0), phase: h.phase, metrics: h.metrics, logFrames: logger.current?.frameCount ?? 0 }
+              : prev
+          );
         }
       }
     },
-    [validator, quality, pushFeedback, session, exercise.totalReps]
+    [validator, quality, pushFeedback, session, exercise.totalReps, framingIndices]
   );
 
   const onLandmarksJS = useMemo(() => Worklets.createRunOnJS(onLandmarksDetected), [onLandmarksDetected]);
@@ -277,7 +344,7 @@ function ActiveExercise({ exercise, sessionId }: { exercise: ExercisePlan; sessi
       frameCount.value += 1;
       if (frameCount.value % FRAME_INTERVAL !== 0) return;
       if (posePlugin == null) return;
-      const result = posePlugin.call(frame) as unknown as Landmark[] | null;
+      const result = posePlugin.call(frame);
       onLandmarksJS(result ?? []);
     },
     [onLandmarksJS]
@@ -286,6 +353,17 @@ function ActiveExercise({ exercise, sessionId }: { exercise: ExercisePlan; sessi
   const onCameraLayout = useCallback((e: LayoutChangeEvent) => {
     const { width, height } = e.nativeEvent.layout;
     setCameraSize({ width, height });
+  }, []);
+
+  // Leer la altura ANTES de entrar al actualizador de estado: React lo ejecuta
+  // más tarde y para entonces `nativeEvent` del evento ya fue reciclado (null).
+  const onTopLayout = useCallback((e: LayoutChangeEvent) => {
+    const height = e.nativeEvent.layout.height;
+    setPanels((p) => (p.top === height ? p : { ...p, top: height }));
+  }, []);
+  const onBottomLayout = useCallback((e: LayoutChangeEvent) => {
+    const height = e.nativeEvent.layout.height;
+    setPanels((p) => (p.bottom === height ? p : { ...p, bottom: height }));
   }, []);
 
   // ── Acciones ──
@@ -302,6 +380,8 @@ function ActiveExercise({ exercise, sessionId }: { exercise: ExercisePlan; sessi
       return;
     }
     navigatingRef.current = true;
+    logger.current?.event("exit", { series: state.seriesCompleted, reps: state.totalRepsDone });
+    logger.current?.flush("exit");
     await persist(state.seriesCompleted, state.totalRepsDone, true);
     router.replace(routes.patientHome);
   };
@@ -336,23 +416,26 @@ function ActiveExercise({ exercise, sessionId }: { exercise: ExercisePlan; sessi
     );
   }
 
-  const cameraActive = state.phase === "countdown" || state.phase === "active";
+  const cameraActive = state.phase === "idle" || state.phase === "countdown" || state.phase === "active";
+  const beta = isBetaExercise(exercise.exerciseId);
+  const view = viewFor(exercise.exerciseId);
   const progress = Math.min(1, state.reps / exercise.totalReps);
 
   return (
     <View style={styles.root}>
-      <View style={styles.cameraWrap} onLayout={onCameraLayout}>
+      {/* La cámara ocupa solo el hueco entre los paneles: así el paciente ve si sus pies salen. */}
+      <View style={[styles.cameraWrap, { top: panels.top, bottom: panels.bottom }]} onLayout={onCameraLayout}>
         <Camera style={StyleSheet.absoluteFill} device={device} format={format} isActive={cameraActive} frameProcessor={frameProcessor} pixelFormat="yuv" />
-        <PoseSkeleton ref={skeletonRef} width={cameraSize.width} height={cameraSize.height} />
+        <PoseSkeleton ref={skeletonRef} width={cameraSize.width} height={cameraSize.height} frameAspect={frameAspect} />
       </View>
 
       {/* ── Top bar ── */}
-      <View style={[styles.top, { paddingTop: insets.top + 8 }]}>
+      <View style={[styles.top, { paddingTop: insets.top + 8 }]} onLayout={onTopLayout}>
         <TouchableOpacity style={styles.iconBtn} onPress={exit} accessibilityRole="button" accessibilityLabel="Salir del entrenamiento">
           <MaterialCommunityIcons name="close" size={30} color={Colors.textOnDark} />
         </TouchableOpacity>
         <View style={{ flex: 1 }}>
-          <Text style={styles.topTitle} numberOfLines={1}>{exercise.name}</Text>
+          <Text style={styles.topTitle} numberOfLines={1}>{exercise.name}{beta ? " · Beta" : ""}</Text>
           <Text style={styles.topSub}>
             Ejercicio {exercise.exerciseIdx + 1} de {exercise.totalExercises} · Serie {Math.min(state.series, exercise.totalSeries)} de {exercise.totalSeries}
           </Text>
@@ -364,15 +447,31 @@ function ActiveExercise({ exercise, sessionId }: { exercise: ExercisePlan; sessi
         )}
       </View>
 
+      {/* ── Encuadre (antes de empezar): overlay translúcido que NO tapa el preview ── */}
+      {state.phase === "idle" && (
+        <View style={[styles.framing, { top: panels.top, bottom: panels.bottom }]} pointerEvents="box-none">
+          <View style={styles.framingTop}>
+            <Text style={styles.framingTitle}>{view === "side" ? "Ponte de perfil al teléfono" : "Ponte de frente al teléfono"}</Text>
+            <Text style={styles.framingSub}>{view === "side" ? "Que se vea tu cuerpo entero, de lado" : framingIndices.length > 9 ? "Que se vea tu cuerpo entero" : "Que se vean tus brazos y tu cadera"}</Text>
+          </View>
+          <View style={styles.framingBottom}>
+            <View style={[styles.visibilityPill, { backgroundColor: framing.ok ? Colors.success : Colors.btnDanger }]} accessibilityLiveRegion="polite">
+              <MaterialCommunityIcons name={framing.ok ? "check-circle" : "alert-circle"} size={26} color={Colors.textOnDark} />
+              <Text style={styles.visibilityText}>{framing.message}</Text>
+            </View>
+            {framing.hint ? <Text style={styles.framingHint}>{framing.hint}</Text> : null}
+            {canSkipFraming && !framing.ok ? (
+              <Button title="Empezar igual" size="patient" variant="outline" onPress={() => setFramed(true)} style={{ marginTop: 10, minWidth: 240 }} testID="skip-framing" />
+            ) : null}
+          </View>
+        </View>
+      )}
+
       {/* ── Overlays de fase ── */}
       {state.phase === "countdown" && (
         <View style={styles.overlay}>
-          <MaterialCommunityIcons name="human-handsup" size={180} color="rgba(255,255,255,0.35)" />
           <Text style={styles.countdown}>{state.countdown}</Text>
-          <View style={[styles.visibilityPill, { backgroundColor: visible ? Colors.success : Colors.btnDanger }]}>
-            <MaterialCommunityIcons name={visible ? "check-circle" : "alert-circle"} size={26} color={Colors.textOnDark} />
-            <Text style={styles.visibilityText}>{visible ? "¡Te vemos completo!" : "Aléjate hasta que se vea todo tu cuerpo"}</Text>
-          </View>
+          <Text style={styles.overlayBody}>Prepárate</Text>
         </View>
       )}
 
@@ -404,7 +503,7 @@ function ActiveExercise({ exercise, sessionId }: { exercise: ExercisePlan; sessi
       )}
 
       {/* ── Controles inferiores ── */}
-      <View style={[styles.bottom, { paddingBottom: insets.bottom + 16 }]}>
+      <View style={[styles.bottom, { paddingBottom: insets.bottom + 16 }]} onLayout={onBottomLayout}>
         {saveError && (
           <View style={[styles.feedback, { backgroundColor: Colors.btnDanger }]}>
             <MaterialCommunityIcons name="cloud-off-outline" size={24} color={Colors.textOnDark} />
@@ -418,7 +517,7 @@ function ActiveExercise({ exercise, sessionId }: { exercise: ExercisePlan; sessi
           </View>
         ) : null}
 
-        <TouchableOpacity onLongPress={() => __DEV__ && setHud((h) => (h ? null : { fps: 0, jsMs: 0, phase: "", metrics: {} }))} activeOpacity={1} accessibilityLabel={`${state.reps} de ${exercise.totalReps} repeticiones`}>
+        <TouchableOpacity onLongPress={() => __DEV__ && setHud((h) => (h ? null : EMPTY_HUD))} activeOpacity={1} accessibilityLabel={`${state.reps} de ${exercise.totalReps} repeticiones`}>
           <Text style={styles.counter}>
             {state.reps}
             <Text style={styles.counterTotal}> / {exercise.totalReps}</Text>
@@ -446,7 +545,8 @@ function ActiveExercise({ exercise, sessionId }: { exercise: ExercisePlan; sessi
       {__DEV__ && hud && (
         <View style={[styles.hud, { top: insets.top + 84 }]} pointerEvents="none">
           <Text style={styles.hudText}>det {hud.fps} fps · js {hud.jsMs} ms</Text>
-          <Text style={styles.hudText}>fase {hud.phase} · nivel {exercise.level}</Text>
+          <Text style={styles.hudText}>nativo conv {hud.convMs} ms · det {hud.detMs} ms</Text>
+          <Text style={styles.hudText}>fase {hud.phase} · nivel {exercise.level} · log {hud.logFrames} fr</Text>
           {Object.entries(hud.metrics).map(([k, v]) => (
             <Text key={k} style={styles.hudText}>{k}: {typeof v === "number" ? v.toFixed(1) : String(v)}</Text>
           ))}
@@ -458,7 +558,13 @@ function ActiveExercise({ exercise, sessionId }: { exercise: ExercisePlan; sessi
 
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: "#0B2F27" },
-  cameraWrap: { ...StyleSheet.absoluteFillObject },
+  cameraWrap: { ...StyleSheet.absoluteFillObject, backgroundColor: "#000" },
+  framing: { position: "absolute", left: 0, right: 0, justifyContent: "space-between", alignItems: "center" },
+  framingTop: { alignItems: "center", paddingHorizontal: 20, paddingTop: 12, backgroundColor: "rgba(11,47,39,0.55)", width: "100%", paddingBottom: 12 },
+  framingTitle: { fontSize: FontSize.title, fontFamily: Fonts.bold, color: Colors.textOnDark, textAlign: "center" },
+  framingSub: { fontSize: FontSize.patient.body, fontFamily: Fonts.regular, color: Colors.textOnDark, textAlign: "center", marginTop: 4 },
+  framingBottom: { alignItems: "center", paddingHorizontal: 16, paddingBottom: 12, width: "100%" },
+  framingHint: { fontSize: FontSize.lg, fontFamily: Fonts.regular, color: Colors.textOnDark, textAlign: "center", marginTop: 6, backgroundColor: "rgba(11,47,39,0.55)", paddingHorizontal: 12, paddingVertical: 4, borderRadius: 10 },
   top: { flexDirection: "row", alignItems: "center", gap: 10, paddingHorizontal: 14, paddingBottom: 12, backgroundColor: "rgba(0,0,0,0.35)" },
   iconBtn: { width: 52, height: 52, borderRadius: 26, backgroundColor: "rgba(0,0,0,0.35)", alignItems: "center", justifyContent: "center" },
   topTitle: { fontSize: FontSize.xxl, fontFamily: Fonts.bold, color: Colors.textOnDark },
