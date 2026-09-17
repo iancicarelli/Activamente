@@ -1,21 +1,18 @@
-import React, { useRef, useEffect, useState } from "react";
-import {
-  View,
-  Text,
-  StyleSheet,
-  TouchableOpacity,
-  ScrollView,
-  ActivityIndicator,
-} from "react-native";
+// screens/patient/InstructionScreen.tsx — instrucciones del ejercicio actual de
+// la rutina REAL (HC-01): video con Play/Ver de nuevo que se pausa al perder
+// foco (EX-04) y botón para verlo a pantalla completa, 3-4 pasos, series/reps/descanso en tarjetas grandes y
+// botón Iniciar fijo abajo (UX-15). `preview=1` permite repasar sin sesión.
+import React, { useCallback, useRef, useState } from "react";
+import { Modal, ScrollView, StyleSheet, Text, TouchableOpacity, View } from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { MaterialCommunityIcons } from "@expo/vector-icons";
-import { useFonts } from "expo-font";
-import { LinearGradient } from "expo-linear-gradient";
-import { useRouter, useLocalSearchParams } from "expo-router";
-import { EXERCISES } from "../../constants/exercises";
-import { Video, ResizeMode } from "expo-av";
-import { getActiveRoutine, RoutineExercise } from "../../services/routineService";
-import { getExercises, Exercise } from "../../services/exerciseService";
-import { getSession } from "../../services/authStore";
+import { useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
+import { Video, ResizeMode, AVPlaybackStatus } from "expo-av";
+import { Screen, Banner, Card, Button, LoadingView, ErrorView, confirm } from "../../components/ui";
+import { Colors, Fonts, FontSize } from "../../constants/theme";
+import { routes } from "../../router/routes";
+import { buildExercisePlan, useSessionPlan } from "../../hooks/useSessionPlan";
+import { splitSentences } from "../../utils/text";
 
 const VIDEO_MAP: Record<string, any> = {
   toe_touch: require("../../assets/videos/toe_touch.mp4"),
@@ -24,293 +21,244 @@ const VIDEO_MAP: Record<string, any> = {
   squat: require("../../assets/videos/squat.mp4"),
 };
 
-// Pasos genéricos de respaldo SOLO si el ejercicio no tiene `instructions` en el
-// backend. El catálogo (GET /api/exercises) sí las trae para los ejercicios
-// sembrados; este fallback cubre ejercicios nuevos que aún no tengan texto.
 const FALLBACK_INSTRUCTIONS = [
   "Colócate en la posición inicial del ejercicio",
-  "Realiza el movimiento de forma lenta y controlada",
-  "Mantén la postura correcta durante toda la repetición",
+  "Haz el movimiento lento y controlado",
+  "Mantén la postura correcta en toda la repetición",
   "Vuelve a la posición inicial y repite",
 ];
 
-// Las instrucciones del backend vienen como un párrafo; lo partimos en oraciones
-// para mostrarlas como lista numerada (misma UI que antes).
-const splitInstructions = (text: string): string[] =>
-  text
-    .split(/(?<=\.)\s+/)
-    .map((s) => s.trim().replace(/\.$/, ""))
-    .filter((s) => s.length > 0);
-
 export default function InstructionScreen() {
   const router = useRouter();
+  const params = useLocalSearchParams<{ index?: string; sessionId?: string; routineId?: string; preview?: string }>();
+  const index = Number(params.index ?? 0);
+  const preview = params.preview === "1" || !params.sessionId;
+  const { plan, loading, error, reload } = useSessionPlan({ sessionId: params.sessionId, routineId: params.routineId });
+
   const videoRef = useRef<Video>(null);
+  const [playing, setPlaying] = useState(false);
+  const [finished, setFinished] = useState(false);
+  const [fullscreen, setFullscreen] = useState(false);
 
-  const { index, sessionId, seIds } = useLocalSearchParams();
-  const currentIndex = Number(index ?? 0);
+  const openFullscreen = () => {
+    void videoRef.current?.pauseAsync().catch(() => {});
+    setPlaying(false);
+    setFullscreen(true);
+  };
 
-  // Opción B: re-consultamos la rutina activa (mismo patrón que PatientHome) en
-  // vez de arrastrar el objeto por params a través de instruction → active →
-  // instruction. El índice mapea a routine.exercises ordenado por order_index,
-  // igual orden que usa el backend para crear los session_exercises.
-  const [routineExercise, setRoutineExercise] = useState<RoutineExercise | null>(null);
-  const [catalog, setCatalog] = useState<Exercise | null>(null);
-  const [totalExercises, setTotalExercises] = useState<number>(0);
-  const [loading, setLoading] = useState(true);
+  // Pausar el video al salir de la pantalla (EX-04).
+  useFocusEffect(
+    useCallback(() => {
+      return () => {
+        void videoRef.current?.pauseAsync().catch(() => {});
+      };
+    }, [])
+  );
 
-  const [fontsLoaded] = useFonts({
-    PromptRegular: require("../../assets/fonts/Prompt-Regular.ttf"),
-    PromptBold: require("../../assets/fonts/Prompt-SemiBold.ttf"),
-  });
+  const exercise = plan ? buildExercisePlan(plan, index) : null;
+  const catalog = exercise && plan ? plan.catalog[exercise.exerciseId] : null;
+  const instructions = catalog?.instructions?.trim() ? splitSentences(catalog.instructions).slice(0, 4) : FALLBACK_INSTRUCTIONS;
 
-  useEffect(() => {
-    const patientId = getSession()?.patient?.id;
-    if (!patientId) {
-      setLoading(false);
+  const togglePlay = async () => {
+    const v = videoRef.current;
+    if (!v) return;
+    if (finished) {
+      await v.replayAsync();
+      setFinished(false);
+      setPlaying(true);
       return;
     }
-    Promise.all([getActiveRoutine(patientId), getExercises()])
-      .then(([routine, exercises]) => {
-        if (!routine) return;
-        const ordered = [...routine.exercises].sort(
-          (a, b) => a.order_index - b.order_index
-        );
-        const re = ordered[currentIndex] ?? null;
-        setRoutineExercise(re);
-        setTotalExercises(ordered.length);
-        if (re) {
-          setCatalog(exercises.find((e) => e.id === re.exercise_id) ?? null);
-        }
-      })
-      .catch((e) => console.error("Error cargando ejercicio:", e))
-      .finally(() => setLoading(false));
-  }, [currentIndex]);
+    if (playing) await v.pauseAsync();
+    else await v.playAsync();
+    setPlaying(!playing);
+  };
 
-  if (!fontsLoaded) return null;
+  const onStatus = (status: AVPlaybackStatus) => {
+    if (!status.isLoaded) return;
+    if (status.didJustFinish) {
+      setFinished(true);
+      setPlaying(false);
+    }
+  };
 
-  // exerciseId real para el video (slug toe_touch/leg_raise/...). Cae al
-  // constante EXERCISES por índice solo si la rutina aún no cargó.
-  const exerciseId = routineExercise?.exercise_id ?? EXERCISES[currentIndex]?.exerciseId;
-  const exerciseName =
-    catalog?.name ??
-    EXERCISES.find((e) => e.exerciseId === exerciseId)?.exerciseName ??
-    exerciseId ??
-    "Ejercicio";
-  const totalSeries = routineExercise?.total_series ?? null;
-  const totalReps = routineExercise?.total_reps ?? null;
-  const totalCount = totalExercises || EXERCISES.length;
-  const instructions =
-    catalog?.instructions && catalog.instructions.trim().length > 0
-      ? splitInstructions(catalog.instructions)
-      : FALLBACK_INSTRUCTIONS;
+  const exit = async () => {
+    if (preview) {
+      router.back();
+      return;
+    }
+    const ok = await confirm("¿Salir del entrenamiento?", "Lo que ya hiciste queda guardado, pero la sesión quedará incompleta.", {
+      confirmText: "Salir",
+      destructive: true,
+    });
+    if (ok) router.replace(routes.patientHome);
+  };
+
+  const start = () => {
+    if (!exercise) return;
+    if (preview) {
+      // En repaso, "siguiente" pasa al ejercicio siguiente sin cámara.
+      if (index + 1 < exercise.totalExercises) {
+        router.replace({ pathname: routes.instruction, params: { routineId: plan?.routine.id ?? "", index: String(index + 1), preview: "1" } });
+      } else {
+        router.back();
+      }
+      return;
+    }
+    router.replace({ pathname: routes.activeExercise, params: { sessionId: params.sessionId ?? "", index: String(index) } });
+  };
 
   return (
-    <LinearGradient colors={["#DEEDE6", "#90C0C1"]} style={styles.container}>
-      <ScrollView contentContainerStyle={styles.scrollContent}>
-        <View style={styles.header}>
-          <TouchableOpacity onPress={() => router.back()} style={{ padding: 6 }}>
-            <MaterialCommunityIcons
-              name="arrow-left"
-              size={32}
-              color="#27695A"
-            />
-          </TouchableOpacity>
-          <View style={styles.headerPill}>
-            <Text style={styles.headerPillText}>{`Ejercicio ${currentIndex + 1} de ${totalCount}`}</Text>
-          </View>
-        </View>
+    <Screen>
+      <Banner
+        title={exercise ? `Ejercicio ${index + 1} de ${exercise.totalExercises}` : "Ejercicio"}
+        subtitle={preview ? "Modo repaso" : undefined}
+        big
+        showBack
+        onBack={exit}
+      />
+      {loading ? (
+        <LoadingView />
+      ) : error || !exercise ? (
+        <ErrorView message={error ?? "No se encontró el ejercicio."} onRetry={reload} big />
+      ) : (
+        <>
+          <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
+            <Text style={styles.name}>{exercise.name}</Text>
 
-        <View style={[styles.videoCard, { overflow: 'hidden' }]}>
-          {exerciseId && VIDEO_MAP[exerciseId] && (
-            <Video
-              ref={videoRef}
-              style={{ width: "100%", height: "100%" }}
-              source={VIDEO_MAP[exerciseId]}
-              useNativeControls
-              resizeMode={ResizeMode.COVER}
-              isLooping
-              shouldPlay
-            />
-          )}
-          <TouchableOpacity
-            style={styles.fullscreenButton}
-            onPress={() => videoRef.current?.presentFullscreenPlayer()}
-            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-          >
-            <MaterialCommunityIcons name="fullscreen" size={24} color="#DEEDE6" />
-          </TouchableOpacity>
-        </View>
-
-        <Text style={styles.exerciseName}>{exerciseName}</Text>
-
-        {loading ? (
-          <ActivityIndicator size="small" color="#27695A" style={{ marginTop: 18 }} />
-        ) : (
-          <View style={styles.pillsRow}>
-            <View style={styles.seriePill}>
-              <Text style={styles.seriePillText}>
-                {totalSeries != null ? `${totalSeries} Series` : "— Series"}
-              </Text>
+            <View style={styles.videoCard}>
+              {VIDEO_MAP[exercise.exerciseId] ? (
+                <Video
+                  ref={videoRef}
+                  style={StyleSheet.absoluteFill}
+                  source={VIDEO_MAP[exercise.exerciseId]}
+                  resizeMode={ResizeMode.COVER}
+                  onPlaybackStatusUpdate={onStatus}
+                  isMuted
+                />
+              ) : null}
+              {!playing && (
+                <TouchableOpacity style={styles.playOverlay} onPress={togglePlay} accessibilityRole="button" accessibilityLabel={finished ? "Ver de nuevo" : "Ver el video"}>
+                  <View style={styles.playCircle}>
+                    <MaterialCommunityIcons name={finished ? "replay" : "play"} size={56} color={Colors.textOnDark} />
+                  </View>
+                  <Text style={styles.playLabel}>{finished ? "Ver de nuevo" : "Ver el video"}</Text>
+                </TouchableOpacity>
+              )}
+              {VIDEO_MAP[exercise.exerciseId] ? (
+                <TouchableOpacity style={styles.expandBtn} onPress={openFullscreen} accessibilityRole="button" accessibilityLabel="Ver video en pantalla completa" testID="video-fullscreen">
+                  <MaterialCommunityIcons name="fullscreen" size={32} color={Colors.textOnDark} />
+                </TouchableOpacity>
+              ) : null}
+              {playing && (
+                <TouchableOpacity style={styles.pauseBtn} onPress={togglePlay} accessibilityRole="button" accessibilityLabel="Pausar video">
+                  <MaterialCommunityIcons name="pause" size={30} color={Colors.textOnDark} />
+                </TouchableOpacity>
+              )}
             </View>
-            <View style={styles.repsPill}>
-              <Text style={styles.repsPillText}>
-                {totalReps != null ? `${totalReps} Repeticiones` : "— Repeticiones"}
-              </Text>
-            </View>
-          </View>
-        )}
 
-        <View style={styles.instructionsList}>
-          {instructions.map((instruction, i) => (
-            <View key={i} style={styles.instructionRow}>
-              <View style={styles.instructionNumber}>
-                <Text style={styles.instructionNumberText}>{i + 1}</Text>
+            <View style={styles.pills}>
+              <Pill icon="repeat-variant" value={String(exercise.totalSeries)} label={exercise.totalSeries === 1 ? "serie" : "series"} />
+              <Pill icon="counter" value={String(exercise.totalReps)} label="repeticiones" />
+              <Pill icon="timer-sand" value={`${exercise.restSeconds} s`} label="descanso" />
+            </View>
+
+            <Card>
+              {instructions.map((text, i) => (
+                <View key={i} style={styles.step}>
+                  <View style={styles.stepNumber}>
+                    <Text style={styles.stepNumberText}>{i + 1}</Text>
+                  </View>
+                  <Text style={styles.stepText}>{text}</Text>
+                </View>
+              ))}
+            </Card>
+          </ScrollView>
+          {VIDEO_MAP[exercise.exerciseId] ? (
+            <FullscreenVideo visible={fullscreen} source={VIDEO_MAP[exercise.exerciseId]} title={exercise.name} onClose={() => setFullscreen(false)} />
+          ) : null}
+          <View style={styles.footer}>
+            <Button
+              title={preview ? (index + 1 < exercise.totalExercises ? "Siguiente ejercicio" : "Volver") : "Iniciar ejercicio"}
+              size="patient"
+              icon={preview ? "arrow-right" : "play"}
+              onPress={start}
+              testID="instruction-start"
+            />
+          </View>
+        </>
+      )}
+    </Screen>
+  );
+}
+
+function FullscreenVideo({ visible, source, title, onClose }: { visible: boolean; source: any; title: string; onClose: () => void }) {
+  const insets = useSafeAreaInsets();
+  const ref = useRef<Video>(null);
+  const [paused, setPaused] = useState(false);
+
+  const togglePause = async () => {
+    const v = ref.current;
+    if (!v) return;
+    if (paused) await v.playAsync();
+    else await v.pauseAsync();
+    setPaused(!paused);
+  };
+
+  return (
+    <Modal visible={visible} animationType="fade" onRequestClose={onClose} onShow={() => setPaused(false)} statusBarTranslucent>
+      <View style={[styles.fullWrap, { paddingTop: insets.top + 12, paddingBottom: insets.bottom + 16 }]}>
+        <Text style={styles.fullTitle} accessibilityRole="header">
+          {title}
+        </Text>
+        <TouchableOpacity style={styles.fullVideo} activeOpacity={1} onPress={togglePause} accessibilityRole="button" accessibilityLabel={paused ? "Reproducir video" : "Pausar video"}>
+          {visible && <Video ref={ref} style={StyleSheet.absoluteFill} source={source} resizeMode={ResizeMode.CONTAIN} shouldPlay isLooping isMuted />}
+          {paused && (
+            <View style={styles.playOverlay}>
+              <View style={styles.playCircle}>
+                <MaterialCommunityIcons name="play" size={56} color={Colors.textOnDark} />
               </View>
-              <Text style={styles.instructionText}>{instruction}</Text>
             </View>
-          ))}
+          )}
+        </TouchableOpacity>
+        <View style={styles.fullActions}>
+          <Button title={paused ? "Reproducir" : "Pausar"} icon={paused ? "play" : "pause"} size="patient" variant="teal" onPress={togglePause} style={{ flex: 1 }} />
+          <Button title="Cerrar" icon="close" size="patient" onPress={onClose} style={{ flex: 1 }} testID="video-fullscreen-close" />
         </View>
-      </ScrollView>
+      </View>
+    </Modal>
+  );
+}
 
-      <TouchableOpacity
-        style={styles.startButton}
-        onPress={() => router.push(`/active-exercise?index=${currentIndex}&sessionId=${sessionId ?? ""}&seIds=${seIds ?? ""}`)}
-      >
-        <Text style={styles.startButtonText}>Iniciar Ejercicio</Text>
-      </TouchableOpacity>
-    </LinearGradient>
+function Pill({ icon, value, label }: { icon: React.ComponentProps<typeof MaterialCommunityIcons>["name"]; value: string; label: string }) {
+  return (
+    <View style={styles.pill} accessibilityLabel={`${value} ${label}`}>
+      <MaterialCommunityIcons name={icon} size={26} color={Colors.btnTeal} />
+      <Text style={styles.pillValue}>{value}</Text>
+      <Text style={styles.pillLabel}>{label}</Text>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-  },
-  scrollContent: {
-    paddingBottom: 20,
-  },
-  header: {
-    flexDirection: "row",
-    alignItems: "center",
-    marginTop: 50,
-    marginHorizontal: 16,
-  },
-  headerPill: {
-    backgroundColor: "#DEEDE6",
-    borderRadius: 20,
-    paddingHorizontal: 20,
-    paddingVertical: 10,
-    marginLeft: 12,
-  },
-  headerPillText: {
-    fontFamily: "PromptBold",
-    fontSize: 20,
-    color: "#27695A",
-  },
-  videoCard: {
-    backgroundColor: "#DEEDE6",
-    borderRadius: 20,
-    marginHorizontal: 16,
-    marginTop: 24,
-    height: 200,
-    alignItems: "center",
-    justifyContent: "center",
-    borderWidth: 1,
-    borderColor: "#49A2A5",
-  },
-  fullscreenButton: {
-    position: "absolute",
-    bottom: 10,
-    right: 10,
-    backgroundColor: "rgba(39,105,90,0.7)",
-    borderRadius: 8,
-    padding: 6,
-  },
-  exerciseName: {
-    fontFamily: "PromptBold",
-    fontSize: 32,
-    color: "#27695A",
-    marginTop: 24,
-    marginHorizontal: 16,
-    textAlign: "center",
-    lineHeight: 40,
-  },
-  pillsRow: {
-    flexDirection: "row",
-    marginTop: 18,
-    marginHorizontal: 16,
-    gap: 10,
-    flexWrap: 'wrap',
-  },
-  seriePill: {
-    backgroundColor: "#DEEDE6",
-    borderRadius: 20,
-    paddingHorizontal: 18,
-    paddingVertical: 10,
-    borderWidth: 1,
-    borderColor: '#49A2A5',
-  },
-  seriePillText: {
-    fontFamily: "PromptBold",
-    fontSize: 22,
-    color: "#27695A",
-  },
-  repsPill: {
-    backgroundColor: "#EAF4F0",
-    borderRadius: 20,
-    paddingHorizontal: 18,
-    paddingVertical: 10,
-    borderWidth: 1,
-    borderColor: '#49A2A5',
-  },
-  repsPillText: {
-    fontFamily: "PromptBold",
-    fontSize: 22,
-    color: "#27695A",
-  },
-  instructionsList: {
-    marginTop: 24,
-    marginHorizontal: 16,
-  },
-  instructionRow: {
-    flexDirection: "row",
-    alignItems: "flex-start",
-    marginBottom: 18,
-  },
-  instructionNumber: {
-    backgroundColor: "#27695A",
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  instructionNumberText: {
-    fontFamily: "PromptBold",
-    fontSize: 22,
-    color: "#DEEDE6",
-  },
-  instructionText: {
-    fontFamily: "PromptRegular",
-    fontSize: 22,
-    color: "#27695A",
-    flex: 1,
-    marginLeft: 14,
-    lineHeight: 30,
-  },
-  startButton: {
-    backgroundColor: "#7BB899",
-    borderRadius: 20,
-    marginHorizontal: 25,
-    marginBottom: 30,
-    marginTop: 16,
-    height: 84,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  startButtonText: {
-    fontFamily: "PromptBold",
-    fontSize: 30,
-    color: "#DEEDE6",
-  },
+  scroll: { padding: 16, paddingBottom: 24 },
+  name: { fontSize: FontSize.hero, fontFamily: Fonts.bold, color: Colors.textPrimary, textAlign: "center", lineHeight: 42, marginBottom: 14 },
+  videoCard: { height: 260, borderRadius: 20, overflow: "hidden", backgroundColor: Colors.textPrimary, borderWidth: 1, borderColor: Colors.border, marginBottom: 14 },
+  playOverlay: { ...StyleSheet.absoluteFillObject, alignItems: "center", justifyContent: "center", backgroundColor: "rgba(0,0,0,0.25)" },
+  playCircle: { width: 96, height: 96, borderRadius: 48, backgroundColor: Colors.btnPrimary, alignItems: "center", justifyContent: "center" },
+  playLabel: { marginTop: 10, fontSize: FontSize.patient.body, fontFamily: Fonts.bold, color: Colors.textOnDark },
+  expandBtn: { position: "absolute", top: 12, right: 12, width: 56, height: 56, borderRadius: 28, backgroundColor: "rgba(39,105,90,0.85)", alignItems: "center", justifyContent: "center" },
+  fullWrap: { flex: 1, backgroundColor: Colors.videoBg, paddingHorizontal: 16 },
+  fullTitle: { fontSize: FontSize.patient.title, fontFamily: Fonts.bold, color: Colors.textOnDark, textAlign: "center", marginBottom: 12 },
+  fullVideo: { flex: 1, borderRadius: 16, overflow: "hidden" },
+  fullActions: { flexDirection: "row", gap: 12, marginTop: 16 },
+  pauseBtn: { position: "absolute", bottom: 12, right: 12, width: 56, height: 56, borderRadius: 28, backgroundColor: "rgba(39,105,90,0.85)", alignItems: "center", justifyContent: "center" },
+  pills: { flexDirection: "row", gap: 10, marginBottom: 14 },
+  pill: { flex: 1, backgroundColor: Colors.cardBg, borderRadius: 16, borderWidth: 1, borderColor: Colors.border, alignItems: "center", paddingVertical: 12 },
+  pillValue: { fontSize: FontSize.title, fontFamily: Fonts.bold, color: Colors.textPrimary, marginTop: 4 },
+  pillLabel: { fontSize: FontSize.md, fontFamily: Fonts.regular, color: Colors.textSecondary },
+  step: { flexDirection: "row", alignItems: "flex-start", gap: 14, marginBottom: 14 },
+  stepNumber: { width: 40, height: 40, borderRadius: 20, backgroundColor: Colors.textPrimary, alignItems: "center", justifyContent: "center" },
+  stepNumberText: { fontSize: FontSize.xl, fontFamily: Fonts.bold, color: Colors.textOnDark },
+  stepText: { flex: 1, fontSize: FontSize.patient.body, fontFamily: Fonts.regular, color: Colors.textPrimary, lineHeight: 30 },
+  footer: { padding: 16, paddingBottom: 24 },
 });

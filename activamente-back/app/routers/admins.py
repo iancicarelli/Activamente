@@ -1,10 +1,10 @@
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
-from app.database import get_db
 from app.core.deps import require_admin
-from app.models.user_model import User
+from app.database import get_db
 from app.models.admin_model import Admin
+from app.models.user_model import User
 from app.schemas.admin_schema import AdminMeResponse, AdminMeUpdate
 
 router = APIRouter(prefix="/api/admins", tags=["admins"])

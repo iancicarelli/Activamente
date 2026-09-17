@@ -1,396 +1,162 @@
-import React, { useEffect, useState } from "react";
-import {
-  View,
-  Text,
-  StyleSheet,
-  ScrollView,
-  TouchableOpacity,
-  ActivityIndicator,
-} from "react-native";
+// screens/specialist/CalendarScreen.tsx — calendario del especialista (UX-06):
+// puntos en los días con citas, estado con color y acciones cancelar /
+// completar (HC-07), horario 24 h (UX-08). Se pueden ver días pasados.
+import React, { useCallback, useEffect, useState } from "react";
+import { ScrollView, StyleSheet, Text, View } from "react-native";
 import { MaterialCommunityIcons } from "@expo/vector-icons";
-import { LinearGradient } from "expo-linear-gradient";
-import { useFonts } from "expo-font";
-import { useLocalSearchParams } from "expo-router";
-import { getAppointmentsByDate, Appointment } from "../../services/appointmentService";
-import SpecialistNavbar from "../../components/SpecialistNavbar";
+import { useFocusEffect, useLocalSearchParams } from "expo-router";
+import { Screen, Banner, Card, Button, Badge, MonthCalendar, LoadingView, EmptyState, ErrorView, SectionTitle, confirm, useToast } from "../../components/ui";
+import { Colors, Fonts, FontSize } from "../../constants/theme";
+import { getAppointmentsByDate, getCalendarCounts, updateAppointmentStatus, Appointment, AppointmentStatus, STATUS_LABEL } from "../../services/appointmentService";
+import { formatLongDate, parseLocalDate, toDateString } from "../../utils/dates";
+import { getErrorMessage } from "../../utils/errors";
 
-// ─── Helpers del Calendario ───────────────────────────────────────────────────
+const TONE: Record<AppointmentStatus, "success" | "warning" | "danger" | "neutral"> = {
+  CONFIRMED: "success",
+  PENDING: "warning",
+  CANCELLED: "danger",
+  COMPLETED: "neutral",
+};
 
-const DAYS_ES = ["Lu", "Ma", "Mi", "Ju", "Vi", "Sa", "Do"];
-const MONTHS_ES = [
-  "Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio",
-  "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre",
-];
-
-type CalDay = { day: number; inMonth: boolean };
-
-function buildCalendar(year: number, month: number): CalDay[][] {
-  const firstDow = (new Date(year, month, 1).getDay() + 6) % 7;
-  const daysInMonth = new Date(year, month + 1, 0).getDate();
-  const daysInPrev = new Date(year, month, 0).getDate();
-
-  const flat: CalDay[] = [];
-
-  for (let i = firstDow - 1; i >= 0; i--) {
-    flat.push({ day: daysInPrev - i, inMonth: false });
-  }
-
-  for (let d = 1; d <= daysInMonth; d++) {
-    flat.push({ day: d, inMonth: true });
-  }
-
-  let next = 1;
-  while (flat.length % 7 !== 0) {
-    flat.push({ day: next++, inMonth: false });
-  }
-
-  const weeks: CalDay[][] = [];
-  for (let i = 0; i < flat.length; i += 7) {
-    weeks.push(flat.slice(i, i + 7));
-  }
-
-  return weeks;
-}
-
-// ─── Componente Principal ─────────────────────────────────────────────────────
+const monthRange = (year: number, month: number) => ({
+  from: toDateString(new Date(year, month, 1)),
+  to: toDateString(new Date(year, month + 1, 0)),
+});
 
 export default function CalendarScreen() {
-  // Fecha opcional recibida al venir desde "Agendar Hora" (YYYY-MM-DD).
+  const toast = useToast();
   const { date } = useLocalSearchParams<{ date?: string }>();
+  const initial = date ? parseLocalDate(date) : new Date();
+  const todayIso = toDateString(new Date());
 
-  // Obtenemos la fecha de hoy a las 00:00:00 para comparar correctamente
-  const todayDateObj = new Date();
-  todayDateObj.setHours(0, 0, 0, 0);
-
-  // Si llegamos desde una cita recién agendada, arrancamos en ese día;
-  // si no, en el día de hoy.
-  const initialDate = date ? new Date(`${date}T00:00:00`) : todayDateObj;
-
-  const [year, setYear] = useState(initialDate.getFullYear());
-  const [month, setMonth] = useState(initialDate.getMonth());
-  const [selectedDay, setSelectedDay] = useState<number | null>(initialDate.getDate());
-  
+  const [year, setYear] = useState(initial.getFullYear());
+  const [month, setMonth] = useState(initial.getMonth());
+  const [selected, setSelected] = useState<string | null>(toDateString(initial));
+  const [marks, setMarks] = useState<Record<string, number>>({});
   const [appointments, setAppointments] = useState<Appointment[]>([]);
-  const [isLoading, setIsLoading] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [updatingId, setUpdatingId] = useState<string | null>(null);
 
-  const [fontsLoaded] = useFonts({
-    PromptRegular: require("../../assets/fonts/Prompt-Regular.ttf"),
-    PromptBold: require("../../assets/fonts/Prompt-SemiBold.ttf"),
-  });
+  const loadMarks = useCallback(async () => {
+    const { from, to } = monthRange(year, month);
+    try {
+      const counts = await getCalendarCounts(from, to);
+      const map: Record<string, number> = {};
+      for (const c of counts) map[c.date] = c.count;
+      setMarks(map);
+    } catch {
+      setMarks({});
+    }
+  }, [year, month]);
 
-  // Efecto para buscar citas cada vez que se selecciona un día
+  const loadDay = useCallback(async () => {
+    if (!selected) return;
+    setLoading(true);
+    setError(null);
+    try {
+      setAppointments(await getAppointmentsByDate(selected));
+    } catch (e) {
+      setError(getErrorMessage(e));
+    } finally {
+      setLoading(false);
+    }
+  }, [selected]);
+
   useEffect(() => {
-    if (!selectedDay) return;
+    void loadMarks();
+  }, [loadMarks]);
 
-    const fetchAppointments = async () => {
-      setIsLoading(true);
-      try {
-        // Formateamos la fecha a YYYY-MM-DD para consultar GET /api/appointments
-        const formattedMonth = String(month + 1).padStart(2, "0");
-        const formattedDay = String(selectedDay).padStart(2, "0");
-        const dateString = `${year}-${formattedMonth}-${formattedDay}`;
+  useFocusEffect(
+    useCallback(() => {
+      void loadDay();
+      void loadMarks();
+    }, [loadDay, loadMarks])
+  );
 
-        const data = await getAppointmentsByDate(dateString);
-        setAppointments(data);
-      } catch (error) {
-        console.error("Error fetching appointments:", error);
-      } finally {
-        setIsLoading(false);
-      }
-    };
-
-    fetchAppointments();
-  }, [selectedDay, month, year]);
+  // Si venimos de "Agendar" con una fecha nueva, saltamos a ese día.
+  useEffect(() => {
+    if (!date) return;
+    const d = parseLocalDate(date);
+    setYear(d.getFullYear());
+    setMonth(d.getMonth());
+    setSelected(date);
+  }, [date]);
 
   const prevMonth = () => {
-    if (month === 0) { setMonth(11); setYear(y => y - 1); }
-    else setMonth(m => m - 1);
-    setSelectedDay(null);
+    if (month === 0) {
+      setMonth(11);
+      setYear((y) => y - 1);
+    } else setMonth((m) => m - 1);
   };
-
   const nextMonth = () => {
-    if (month === 11) { setMonth(0); setYear(y => y + 1); }
-    else setMonth(m => m + 1);
-    setSelectedDay(null);
+    if (month === 11) {
+      setMonth(0);
+      setYear((y) => y + 1);
+    } else setMonth((m) => m + 1);
   };
 
-  if (!fontsLoaded) return null;
-
-  const weeks = buildCalendar(year, month);
+  const changeStatus = async (a: Appointment, status: AppointmentStatus) => {
+    const label = status === "CANCELLED" ? "cancelar" : "marcar como completada";
+    const ok = await confirm("Confirmar", `¿Quieres ${label} la cita de ${a.patientName} a las ${a.time}?`, { confirmText: "Sí", destructive: status === "CANCELLED" });
+    if (!ok) return;
+    setUpdatingId(a.id);
+    try {
+      const updated = await updateAppointmentStatus(a.id, status);
+      setAppointments((prev) => prev.map((x) => (x.id === updated.id ? updated : x)));
+      void loadMarks();
+      toast(status === "CANCELLED" ? "Cita cancelada" : "Cita completada");
+    } catch (e) {
+      toast(getErrorMessage(e), "error");
+    } finally {
+      setUpdatingId(null);
+    }
+  };
 
   return (
-    <LinearGradient colors={['#DEEDE6','#90C0C1']} style={styles.safeArea}>
-      <View style={styles.container}>
+    <Screen>
+      <Banner overline="Panel profesional" title="Calendario" />
+      <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
+        <MonthCalendar year={year} month={month} selected={selected} onSelect={setSelected} onPrevMonth={prevMonth} onNextMonth={nextMonth} marks={marks} todayIso={todayIso} />
 
-        {/* ── Banner ── */}
-        <View style={styles.banner}>
-          <Text style={styles.bannerTitle}>Calendario</Text>
-        </View>
-
-        <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
-
-          {/* ── Calendario Custom ── */}
-          <View style={styles.calendarCard}>
-            
-            {/* Controles de Mes */}
-            <View style={styles.monthNav}>
-              <TouchableOpacity onPress={prevMonth} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
-                <MaterialCommunityIcons name="chevron-left" size={24} color="#0D472A" />
-              </TouchableOpacity>
-              <Text style={styles.monthLabel}>
-                {MONTHS_ES[month]} {year}
-              </Text>
-              <TouchableOpacity onPress={nextMonth} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
-                <MaterialCommunityIcons name="chevron-right" size={24} color="#0D472A" />
-              </TouchableOpacity>
-            </View>
-
-            {/* Cabecera de Días */}
-            <View style={styles.calRow}>
-              {DAYS_ES.map((d) => (
-                <Text key={d} style={styles.dayHeader}>{d}</Text>
-              ))}
-            </View>
-
-            {/* Cuadrícula de Días */}
-            {weeks.map((week, wi) => (
-              <View key={wi} style={styles.calRow}>
-                {week.map((cell, di) => {
-                  // Validación para saber si es un día pasado
-                  const cellDate = new Date(year, month, cell.day);
-                  const isPast = cellDate < todayDateObj;
-                  
-                  const isSelected = cell.inMonth && cell.day === selectedDay;
-                  // Deshabilitamos si no es del mes actual o si es un día en el pasado
-                  const isDisabled = !cell.inMonth || isPast;
-
-                  return (
-                    <TouchableOpacity
-                      key={di}
-                      style={[styles.calCell, isSelected && styles.calCellSelected]}
-                      onPress={() => {
-                        if (!isDisabled) setSelectedDay(cell.day);
-                      }}
-                      activeOpacity={isDisabled ? 1 : 0.7}
-                      disabled={isDisabled}
-                    >
-                      <Text
-                        style={[
-                          styles.calCellText,
-                          isDisabled && styles.calCellGray,
-                          isSelected && styles.calCellTextSelected,
-                        ]}
-                      >
-                        {cell.day}
-                      </Text>
-                    </TouchableOpacity>
-                  );
-                })}
-              </View>
-            ))}
-          </View>
-
-          {/* ── Lista de Citas ── */}
-          <Text style={styles.sectionTitle}>
-            Citas {selectedDay ? `el ${selectedDay} de ${MONTHS_ES[month]}` : "Programadas"}
-          </Text>
-
-          {isLoading ? (
-            <ActivityIndicator size="large" color="#49A2A5" style={{ marginTop: 40 }} />
-          ) : !selectedDay ? (
-            <Text style={styles.emptyText}>Selecciona un día para ver las citas.</Text>
-          ) : appointments.length === 0 ? (
-            <View style={styles.emptyCard}>
-              <MaterialCommunityIcons name="calendar-check" size={40} color="#D8ECEA" />
-              <Text style={styles.emptyText}>No hay citas para esta fecha.</Text>
-            </View>
-          ) : (
-            appointments.map((appointment) => (
-              <View key={appointment.id} style={styles.appointmentCard}>
-                
-                <View style={styles.appointmentHeader}>
-                  <Text style={styles.appointmentPatient}>{appointment.patientName}</Text>
-                  <View style={[
-                    styles.statusBadge
-                  ]}>
-                    <Text style={[
-                      styles.statusBadgeText
-                    ]}>
-                    </Text>
-                  </View>
+        <SectionTitle>{selected ? `Citas del ${formatLongDate(selected).toLowerCase()}` : "Citas"}</SectionTitle>
+        {loading ? (
+          <LoadingView />
+        ) : error ? (
+          <ErrorView message={error} onRetry={loadDay} />
+        ) : appointments.length === 0 ? (
+          <EmptyState icon="calendar-check" title="Sin citas" message="No hay citas para esta fecha." />
+        ) : (
+          appointments.map((a) => (
+            <Card key={a.id} style={styles.card}>
+              <View style={styles.cardHead}>
+                <Text style={styles.time}>{a.time}</Text>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.patient}>{a.patientName}</Text>
+                  {a.notes ? <Text style={styles.notes}>{a.notes}</Text> : null}
                 </View>
-
-                <View style={styles.appointmentDetails}>
-                  <View style={styles.detailItem}>
-                    <MaterialCommunityIcons name="calendar-blank-outline" size={18} color="#49A2A5" />
-                    <Text style={styles.detailText}>{appointment.displayFullDate}</Text>
-                  </View>
-                  <View style={styles.detailItem}>
-                    <MaterialCommunityIcons name="clock-outline" size={18} color="#49A2A5" />
-                    <Text style={styles.detailText}>{appointment.time}</Text>
-                  </View>
-                </View>
-
+                <Badge label={STATUS_LABEL[a.status]} tone={TONE[a.status]} />
               </View>
-            ))
-          )}
-
-        </ScrollView>
-
-        <SpecialistNavbar active="calendar" />
-      </View>
-    </LinearGradient>
+              {(a.status === "CONFIRMED" || a.status === "PENDING") && (
+                <View style={styles.actions}>
+                  <Button title="Cancelar" variant="outline" size="sm" icon="close" onPress={() => changeStatus(a, "CANCELLED")} loading={updatingId === a.id} style={{ flex: 1 }} />
+                  <Button title="Completada" size="sm" icon="check" onPress={() => changeStatus(a, "COMPLETED")} loading={updatingId === a.id} style={{ flex: 1 }} />
+                </View>
+              )}
+            </Card>
+          ))
+        )}
+      </ScrollView>
+    </Screen>
   );
 }
 
-// ─── Styles ───────────────────────────────────────────────────────────────────
-
 const styles = StyleSheet.create({
-  safeArea: {
-    flex: 1,
-  },
-  container: {
-    flex: 1,
-  },
-  scrollContent: {
-    paddingHorizontal: 16,
-    paddingBottom: 40,
-  },
-  banner: {
-    width: '100%',
-    backgroundColor: '#49A2A5',
-    paddingTop: 54,
-    paddingBottom: 24,
-    paddingHorizontal: 20,
-    borderBottomLeftRadius: 24,
-    borderBottomRightRadius: 24,
-  },
-  bannerTitle: {
-    fontSize: 24,
-    fontFamily: 'PromptBold',
-    color: '#DEEDE6',
-  },
-
-  // ── Calendar Card ──
-  calendarCard: {
-    backgroundColor: "rgba(222,237,230,0.85)",
-    borderRadius: 16,
-    padding: 16,
-    marginBottom: 24,
-  },
-  monthNav: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    marginBottom: 16,
-  },
-  monthLabel: {
-    fontSize: 18,
-    fontFamily: "PromptBold",
-    color: "#27695A",
-  },
-  calRow: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    marginBottom: 6,
-  },
-  dayHeader: {
-    flex: 1,
-    textAlign: "center",
-    fontSize: 12,
-    fontFamily: "PromptBold",
-    color: "rgba(39, 105, 90,0.5)",
-    paddingBottom: 6,
-  },
-  calCell: {
-    flex: 1,
-    alignItems: "center",
-    paddingVertical: 8,
-    borderRadius: 20,
-  },
-  calCellSelected: {
-    backgroundColor: "#27695A",
-    borderRadius: 20,
-  },
-  calCellText: {
-    fontSize: 14,
-    fontFamily: "PromptRegular",
-    color: "#27695A",
-  },
-  // Estilo para días pasados o fuera del mes
-  calCellGray: {
-    color: "rgba(39, 105, 90,0.25)",
-  },
-  calCellTextSelected: {
-    color: "#DEEDE6",
-    fontFamily: "PromptBold",
-  },
-
-  // ── Sección de Citas ──
-  sectionTitle: {
-    fontSize: 18,
-    fontFamily: "PromptBold",
-    color: "#27695A",
-    marginBottom: 16,
-    marginLeft: 4,
-  },
-  emptyCard: {
-    backgroundColor: "rgba(222,237,230,0.85)",
-    borderRadius: 16,
-    padding: 30,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  emptyText: {
-    fontSize: 14,
-    fontFamily: "PromptRegular",
-    color: "rgba(39, 105, 90,0.6)",
-    textAlign: "center",
-    marginTop: 10,
-  },
-
-  // ── Tarjeta de Cita ──
-  appointmentCard: {
-    backgroundColor: "rgba(222,237,230,0.85)",
-    borderRadius: 16,
-    padding: 16,
-    marginBottom: 12,
-    borderLeftWidth: 4,
-    borderLeftColor: "#49A2A5",
-  },
-  appointmentHeader: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    marginBottom: 12,
-  },
-  appointmentPatient: {
-    fontSize: 16,
-    fontFamily: "PromptBold",
-    color: "#27695A",
-  },
-  statusBadge: {
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    borderRadius: 8,
-  },
-  statusBadgeText: {
-    fontSize: 10,
-    fontFamily: "PromptBold",
-    letterSpacing: 0.5,
-  },
-  appointmentDetails: {
-    flexDirection: "row",
-    gap: 16,
-  },
-  detailItem: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 6,
-  },
-  detailText: {
-    fontSize: 13,
-    fontFamily: "PromptRegular",
-    color: "#27695A",
-  },
+  scroll: { padding: 16, paddingBottom: 32 },
+  card: { borderLeftWidth: 4, borderLeftColor: Colors.btnTeal },
+  cardHead: { flexDirection: "row", alignItems: "center", gap: 12 },
+  time: { fontSize: FontSize.xl, fontFamily: Fonts.bold, color: Colors.textPrimary, minWidth: 60 },
+  patient: { fontSize: FontSize.md, fontFamily: Fonts.bold, color: Colors.textPrimary },
+  notes: { fontSize: FontSize.sm, fontFamily: Fonts.regular, color: Colors.textSecondary, marginTop: 2 },
+  actions: { flexDirection: "row", gap: 8, marginTop: 12 },
 });

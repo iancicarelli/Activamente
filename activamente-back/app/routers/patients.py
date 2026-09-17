@@ -1,109 +1,131 @@
+from uuid import UUID
+
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import func
 from sqlalchemy.orm import Session
 
+from app.core.authz import assert_patient_access, get_patient_or_404, is_assigned
+from app.core.deps import get_current_user, require_patient, require_specialist, require_staff
+from app.core.rut import normalize_rut, rut_column_normalized
 from app.database import get_db
-from app.core.deps import get_current_user, require_specialist
-from app.models.user_model import User, UserRole
 from app.models.patient_model import Patient
 from app.models.specialist_patient_model import SpecialistPatient
-
-from app.services.patient_metrics import (
-    get_patient_alert,
-    get_patient_metrics_and_sessions,
-)
+from app.models.user_model import User, UserRole
 from app.schemas.patient_schema import (
-    PatientResponse,
-    PatientStatusUpdate,
     AssignPatientRequest,
     PatientListResponse,
+    PatientResponse,
+    PatientStatusUpdate,
+    SessionItem,
+)
+from app.services.patient_metrics import (
+    get_alerts_bulk,
+    get_patient_metrics_and_sessions,
+    get_patient_sessions,
+    get_wellbeing_status,
 )
 
 router = APIRouter(prefix="/api/patients", tags=["patients"])
 
 
-def normalize_rut(rut: str) -> str:
-    """
-    Normaliza un RUT para comparar contra el guardado en la BD: quita puntos,
-    espacios y guiones, y pasa a mayúsculas. El frontend formatea el RUT con
-    puntos (ej: "98.765.432-1") pero en la BD se guarda sin puntos
-    ("98765432-1"), por lo que la búsqueda directa fallaba con 404.
-    """
-    return (rut or "").replace(".", "").replace(" ", "").replace("-", "").upper()
-
-
-def _rut_column_normalized(column):
-    """Misma normalización que normalize_rut() pero aplicada en SQL sobre la
-    columna, para que la comparación no dependa del formato guardado."""
-    return func.upper(
-        func.replace(func.replace(func.replace(column, ".", ""), " ", ""), "-", "")
+def _patient_response(
+    db: Session, user: User, row: Patient | None, current_user: User, with_history: bool = True
+) -> PatientResponse:
+    metrics, sessions = get_patient_metrics_and_sessions(db, user.id) if with_history else (None, None)
+    assigned = is_assigned(db, current_user.id, user.id) if current_user.role == UserRole.SPECIALIST else None
+    return PatientResponse(
+        id=str(user.id),
+        fullName=user.full_name,
+        email=user.email,
+        active=user.is_active,
+        rut=row.rut if row else None,
+        age=row.age if row else None,
+        gender=row.gender if row else None,
+        phone=row.phone if row else None,
+        address=row.address if row else None,
+        assignedToMe=assigned,
+        metrics=metrics,
+        sessions=sessions,
+        wellbeing=get_wellbeing_status(db, user.id) if with_history else None,
     )
 
 
 @router.get("/", response_model=list[PatientListResponse])
 def get_patients(
-    limit: int = Query(50, ge=1, le=100, description="Max rows to return (paginación)"),
-    offset: int = Query(0, ge=0, description="Rows to skip (paginación)"),
+    limit: int = Query(50, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+    search: str | None = Query(None),
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_staff),
 ):
-    patients = (
-        db.query(User)
-        .filter(User.role == UserRole.PATIENT)
-        .order_by(User.created_at.desc())
-        .offset(offset)
-        .limit(limit)
-        .all()
-    )
+    """
+    Especialista → SOLO sus pacientes asignados (EP-01). Admin → todos.
+    Un paciente no puede listar pacientes (R-11 → 403 por require_staff).
+    Alertas calculadas en bloque (sin N+1).
+    """
+    query = db.query(User, Patient).outerjoin(Patient, Patient.user_id == User.id).filter(User.role == UserRole.PATIENT)
+    if current_user.role == UserRole.SPECIALIST:
+        query = query.join(SpecialistPatient, SpecialistPatient.patient_id == User.id).filter(
+            SpecialistPatient.specialist_id == current_user.id
+        )
+    if search and search.strip():
+        term = f"%{search.strip()}%"
+        query = query.filter((User.first_name.ilike(term)) | (User.last_name.ilike(term)) | (User.email.ilike(term)))
+
+    rows = query.order_by(User.last_name.asc(), User.first_name.asc()).offset(offset).limit(limit).all()
+    alerts = get_alerts_bulk(db, [u.id for u, _ in rows])
+
     results = []
-
-    for p in patients:
-        has_alert, alert_message = get_patient_alert(db, p.id)
-
+    for user, row in rows:
+        info = alerts[user.id]
         results.append(
             PatientListResponse(
-                id=str(p.id),
-                first_name=p.first_name,
-                last_name=p.last_name,
-                email=p.email,
-                created_at=p.created_at,
-                hasAlert=has_alert,
-                alertMessage=alert_message
+                id=str(user.id),
+                first_name=user.first_name,
+                last_name=user.last_name,
+                email=user.email,
+                rut=row.rut if row else None,
+                age=row.age if row else None,
+                is_active=user.is_active,
+                created_at=user.created_at,
+                hasAlert=info.has_alert,
+                alertMessage=info.message,
+                alertKind=info.kind,
+                isNew=info.is_new,
+                lastSessionDate=info.last_session_date,
             )
         )
     return results
+
+
+@router.get("/me/sessions", response_model=list[SessionItem])
+def get_my_sessions(
+    limit: int = Query(20, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+    db: Session = Depends(get_db),
+    patient: User = Depends(require_patient),
+):
+    """Historial del paciente logueado (UX-17)."""
+    return get_patient_sessions(db, patient.id, limit=limit, offset=offset)
+
 
 @router.get("/by-rut/{rut}", response_model=PatientResponse)
 def get_patient_by_rut(
     rut: str,
     db: Session = Depends(get_db),
-    _specialist: User = Depends(require_specialist),
+    current_user: User = Depends(require_staff),
 ):
-    patient = db.query(Patient).filter(
-        _rut_column_normalized(Patient.rut) == normalize_rut(rut)
-    ).first()
-    if not patient:
+    """Búsqueda por RUT para asignar. Devuelve ficha SIN historial si el
+    especialista aún no tiene asignado al paciente (solo lo necesario para
+    confirmar identidad); con historial si ya está asignado o es admin."""
+    row = db.query(Patient).filter(rut_column_normalized(Patient.rut) == normalize_rut(rut)).first()
+    if not row:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Paciente no encontrado. Verifica el RUT.")
-
-    user = db.query(User).filter(User.id == patient.user_id).first()
+    user = db.query(User).filter(User.id == row.user_id).first()
     if not user:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Paciente no encontrado.")
 
-    metrics, sessions_list = get_patient_metrics_and_sessions(db, str(patient.user_id))
-
-    return PatientResponse(
-        id=str(patient.user_id),
-        fullName=f"{user.first_name} {user.last_name}".strip(),
-        rut=patient.rut,
-        age=patient.age,
-        gender=patient.gender,
-        email=user.email,
-        phone=patient.phone,
-        address=patient.address,
-        active=patient.is_active,
-        metrics=metrics,
-        sessions=sessions_list
-    )
+    can_see_history = current_user.role == UserRole.ADMIN or is_assigned(db, current_user.id, user.id)
+    return _patient_response(db, user, row, current_user, with_history=can_see_history)
 
 
 @router.get("/{patient_id}", response_model=PatientResponse)
@@ -112,105 +134,66 @@ def get_patient_by_id(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    patient = db.query(User).filter(User.id == patient_id).first()
-    if not patient:
-        raise HTTPException(status_code=404, detail="Paciente no encontrado")
+    """Ficha completa. Admin: cualquiera; especialista: solo asignados; paciente: solo él."""
+    user, row = get_patient_or_404(db, patient_id)
+    assert_patient_access(db, current_user, user.id)
+    return _patient_response(db, user, row, current_user)
 
-    # Un especialista solo puede ver la ficha de los pacientes que tiene
-    # asignados en specialist_patient. Otros roles (admin) no se restringen.
-    if current_user.role == UserRole.SPECIALIST:
-        assigned = (
-            db.query(SpecialistPatient)
-            .filter(
-                SpecialistPatient.specialist_id == current_user.id,
-                SpecialistPatient.patient_id == patient_id,
-            )
-            .first()
-        )
-        if not assigned:
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="No tienes acceso a este paciente")
 
-    # patients.is_active es la fuente de verdad del estado del paciente
-    # (coincide con /by-rut y PATCH /status).
-    patient_row = db.query(Patient).filter(Patient.user_id == patient_id).first()
-    
-    metrics, sessions_list = get_patient_metrics_and_sessions(db, patient_id)
-    
-    return PatientResponse(
-        id=str(patient.id),
-        fullName=f"{patient.first_name} {patient.last_name}".strip(),
-        email=patient.email,
-        active=patient_row.is_active if patient_row else True,
-        rut=patient_row.rut if patient_row else None,
-        age=patient_row.age if patient_row else None,
-        gender=patient_row.gender if patient_row else None,
-        phone=patient_row.phone if patient_row else None,
-        address=patient_row.address if patient_row else None,
-        metrics=metrics,
-        sessions=sessions_list
-    )
-
-# Asigna un paciente a un especialista. El especialista se obtiene del token
-# del usuario que hace la peticion; el RUT del paciente viene en el body.
 @router.post("/assign", status_code=status.HTTP_200_OK)
 def assign_patient_to_specialist(
     body: AssignPatientRequest,
     db: Session = Depends(get_db),
     specialist: User = Depends(require_specialist),
 ):
-    patient = db.query(Patient).filter(
-        _rut_column_normalized(Patient.rut) == normalize_rut(body.rut)
-    ).first()
-    if not patient:
+    """Agrega un paciente (por RUT) a la lista del especialista del token."""
+    row = db.query(Patient).filter(rut_column_normalized(Patient.rut) == normalize_rut(body.rut)).first()
+    if not row:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Paciente no encontrado. Verifica el RUT.")
 
-    already_assigned = (
+    if is_assigned(db, specialist.id, row.user_id):
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="El paciente ya está en tu lista.")
+
+    db.add(SpecialistPatient(specialist_id=specialist.id, patient_id=row.user_id))
+    db.commit()
+    return {"message": "Paciente asignado correctamente", "patient_id": str(row.user_id)}
+
+
+@router.delete("/{patient_id}/assign", status_code=status.HTTP_204_NO_CONTENT)
+def unassign_patient(
+    patient_id: UUID,
+    db: Session = Depends(get_db),
+    specialist: User = Depends(require_specialist),
+):
+    """Quita al paciente de la lista del especialista (no toca la cuenta)."""
+    link = (
         db.query(SpecialistPatient)
-        .filter(
-            SpecialistPatient.specialist_id == specialist.id,
-            SpecialistPatient.patient_id == patient.user_id,
-        )
+        .filter(SpecialistPatient.specialist_id == specialist.id, SpecialistPatient.patient_id == patient_id)
         .first()
     )
-    if already_assigned:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Paciente ya está asignado a este especialista")
-
-    db.add(SpecialistPatient(specialist_id=specialist.id, patient_id=patient.user_id))
+    if not link:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="El paciente no está en tu lista.")
+    db.delete(link)
     db.commit()
+    return None
 
-    return {"message": "Paciente asignado correctamente"}
 
 @router.patch("/{patient_id}/status", response_model=PatientResponse)
 def update_patient_status(
     patient_id: str,
     body: PatientStatusUpdate,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_staff),
 ):
-    user = db.query(User).filter(User.id == patient_id, User.role == UserRole.PATIENT).first()
-    if not user:
-        raise HTTPException(status_code=404, detail="Paciente no encontrado")
+    """
+    Habilita/deshabilita la CUENTA del paciente (users.is_active, R-01 opción a):
+    un paciente deshabilitado no puede iniciar sesión y su token vivo deja de
+    servir. Solo el especialista asignado o un admin.
+    """
+    user, row = get_patient_or_404(db, patient_id)
+    assert_patient_access(db, current_user, user.id)
 
-    patient = db.query(Patient).filter(Patient.user_id == patient_id).first()
-    if not patient:
-        raise HTTPException(status_code=404, detail="Paciente no encontrado")
-
-    # Fuente de verdad única: patients.is_active (la misma que lee /by-rut).
-    patient.is_active = body.active
+    user.is_active = body.active
     db.commit()
-    db.refresh(patient)
-
-    return PatientResponse(
-        id=str(user.id),
-        fullName=f"{user.first_name} {user.last_name}".strip(),
-        email=user.email,
-        active=patient.is_active,
-        rut=patient.rut,
-        age=patient.age,
-        gender=patient.gender,
-        phone=patient.phone,
-        address=patient.address,
-    )
-
-
-
+    db.refresh(user)
+    return _patient_response(db, user, row, current_user, with_history=False)

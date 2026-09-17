@@ -1,39 +1,35 @@
 // services/authService.ts
 import { apiFetch } from "./apiClient";
-import { setAuth, clearAuth, UserRole, Patient } from "./authStore";
+import { setAuth, clearAuth, UserRole } from "./authStore";
+import { looksLikeRut, normalizeRut } from "../utils/rut";
 
-// Shape returned by POST /api/auth/login on the backend.
+// Shape de POST /api/auth/login.
 export interface LoginResponse {
   access_token: string;
   token_type: string;
   role: UserRole;
   user_id: string;
-  patient?: Patient;
+  expires_in: number; // segundos
 }
 
-// Authenticates against the backend, stores the JWT + role in the auth store
-// and returns the raw response so the caller can route by role.
-export const loginApi = async (
-  email: string,
-  password: string
-): Promise<LoginResponse> => {
-  const data = await apiFetch<LoginResponse>("/api/auth/login", {
-    method: "POST",
-    auth: false, // no token yet — this is how we get one
-    body: { email, password },
-  });
+// Acepta email o RUT (R-05): decide por la forma del texto.
+export const loginApi = async (identifier: string, password: string): Promise<LoginResponse> => {
+  const value = identifier.trim();
+  const body = looksLikeRut(value)
+    ? { rut: normalizeRut(value), password }
+    : { email: value.toLowerCase(), password };
+
+  const data = await apiFetch<LoginResponse>("/api/auth/login", { method: "POST", auth: false, body });
 
   setAuth({
     token: data.access_token,
     role: data.role,
     userId: data.user_id,
-    patient: data.patient
+    expiresAt: Date.now() + data.expires_in * 1000,
   });
-
   return data;
 };
 
-// Clears the stored session. Call this from any "cerrar sesión" button.
 export const logout = (): void => {
-  clearAuth();
+  clearAuth("logout");
 };

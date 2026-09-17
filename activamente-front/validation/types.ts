@@ -1,14 +1,8 @@
 /**
  * Tipos compartidos por todo el módulo de validación.
- * Todo validador nuevo (ver `validators/exerciseRegistry.ts`) debe respetar
- * estos contratos.
  */
 
-/**
- * Un landmark de MediaPipe BlazePose.
- * Coordenadas normalizadas: x, y ∈ [0, 1] respecto al frame.
- * `visibility` ∈ [0, 1]; usar `MIN_VISIBILITY` como umbral mínimo.
- */
+/** Un landmark de MediaPipe BlazePose (x, y ∈ [0,1], y crece hacia abajo). */
 export type Landmark = {
   x: number;
   y: number;
@@ -17,52 +11,47 @@ export type Landmark = {
 };
 
 /**
- * Fases de la máquina de estados de una repetición.
- *  - standing:   posición inicial / final de la rep.
- *  - descending: bajando hacia el objetivo.
- *  - hold:       objetivo alcanzado, manteniendo la pose.
- *  - ascending:  subiendo de vuelta a standing.
- *
- * Una rep se cuenta en la transición (hold | ascending) → standing.
- * Si un ejercicio necesita más fases, ampliar esta unión.
+ * Fases de una repetición: standing → descending → hold → ascending → standing.
+ * La rep se cuenta en la transición confirmada (hold | ascending) → standing.
  */
-export type ValidatorPhase = 'standing' | 'descending' | 'hold' | 'ascending';
+export type ValidatorPhase = "standing" | "descending" | "hold" | "ascending";
 
-/**
- * Lo que retorna el validador en cada frame.
- *  - ok:           pose válida en este frame.
- *  - feedback:     mensaje en español para el usuario (o null si no hay).
- *  - repCompleted: true SOLO en el frame que cierra una rep.
- *  - phase:        fase resultante tras procesar este frame.
- */
 export type ValidatorResult = {
   ok: boolean;
   feedback: string | null;
   repCompleted: boolean;
-  phase?: ValidatorPhase;
+  phase: ValidatorPhase;
+  // Métricas crudas para el HUD de rendimiento (EX-03). Opcional.
+  metrics?: Record<string, number>;
 };
 
 /**
- * Estado persistente entre frames. El hook `useExerciseValidator` lo guarda
- * en un ref y lo pasa por referencia al validador, que puede mutarlo.
- * Se resetea automáticamente al cambiar de ejercicio o nivel.
+ * Estado persistente entre frames. TODO el estado vive acá (no en closures),
+ * así `useExerciseValidator` lo resetea completo al cambiar de ejercicio,
+ * nivel o sesión (EX-06): buffers de suavizado e historial de fases incluidos.
  */
 export type ValidatorState = {
   phase: ValidatorPhase;
   prevAngle: number;
   repCount: number;
+  buffers: Record<string, number[]>;
+  phaseHistory: ValidatorPhase[];
+  frames: number;
 };
 
-/** Firma de la función de validación que recibe un frame. */
+export const createValidatorState = (): ValidatorState => ({
+  phase: "standing",
+  prevAngle: 180,
+  repCount: 0,
+  buffers: {},
+  phaseHistory: [],
+  frames: 0,
+});
+
 export type ValidatorFn = (lms: Landmark[], state: ValidatorState) => ValidatorResult;
 
-/**
- * Contrato de un ejercicio registrable.
- *  - id:     identificador único; debe coincidir con la clave en el registry
- *            y con el `exerciseId` que envíe el back.
- *  - levels: una función validadora por nivel de dificultad (mínimo nivel 1).
- */
 export type ExerciseValidator = {
   id: string;
   levels: Record<number, ValidatorFn>;
+  maxLevel: number;
 };

@@ -1,164 +1,134 @@
-import React, { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, Image, ScrollView } from 'react-native';
-import { LinearGradient } from 'expo-linear-gradient';
-import { MaterialCommunityIcons } from '@expo/vector-icons';
-import { useFonts } from 'expo-font';
-import PatientNavbar from '../../components/PatientNavbar';
-import { getSession } from '../../services/authStore';
-
+// screens/patient/PatientProfileScreen.tsx — perfil del paciente (UX-18):
+// datos reales de GET /api/me (HC-03), especialistas asignados con botón
+// "Llamar", próxima cita, cambio de contraseña y "Cerrar sesión" grande.
+import React, { useCallback, useState } from "react";
+import { Linking, ScrollView, StyleSheet, Text, View } from "react-native";
+import { MaterialCommunityIcons } from "@expo/vector-icons";
+import { useFocusEffect } from "expo-router";
+import { Screen, Banner, Card, Button, InfoRow, LoadingView, ErrorView, SectionTitle, confirm, useToast } from "../../components/ui";
+import { ChangePasswordModal } from "../../components/ChangePasswordModal";
+import { Colors, Fonts, FontSize } from "../../constants/theme";
+import { logout } from "../../services/authService";
+import { getMe, MeResponse } from "../../services/meService";
+import { getNextAppointment, Appointment } from "../../services/appointmentService";
+import { formatLongDate } from "../../utils/dates";
+import { getErrorMessage } from "../../utils/errors";
 
 export default function PatientProfileScreen() {
-    const [email, setEmail] = useState('');
-    const [phone, setPhone] = useState('');
-    const [isLoading, setIsLoading] = useState(false);
+  const toast = useToast();
+  const [me, setMe] = useState<MeResponse | null>(null);
+  const [appointment, setAppointment] = useState<Appointment | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [passwordVisible, setPasswordVisible] = useState(false);
 
-    const [fontsLoaded] = useFonts({
-        PromptRegular: require("../../assets/fonts/Prompt-Regular.ttf"),
-        PromptBold: require("../../assets/fonts/Prompt-SemiBold.ttf"),
-    });
-
-    if (!fontsLoaded) {
-        return null;
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const [profile, appt] = await Promise.all([getMe(), getNextAppointment().catch(() => null)]);
+      setMe(profile);
+      setAppointment(appt);
+    } catch (e) {
+      setError(getErrorMessage(e));
+    } finally {
+      setLoading(false);
     }
+  }, []);
 
-    const session = getSession();
-    const patient = session?.patient;
+  useFocusEffect(
+    useCallback(() => {
+      void load();
+    }, [load])
+  );
 
-    console.log("Paciente en sesión:", patient);
+  const handleLogout = async () => {
+    const ok = await confirm("¿Cerrar sesión?", "Tendrás que ingresar tu correo o RUT y contraseña la próxima vez.", { confirmText: "Cerrar sesión", destructive: true });
+    if (ok) logout();
+  };
 
-    return (
-        <LinearGradient colors={["#DEEDE6", "#90C0C1"]} style={styles.container}>
-            <View style={styles.banner}>
-                <Text style={styles.bannerTitle}>Mi Perfil</Text>
+  const call = (phone: string | null) => {
+    if (!phone) return;
+    void Linking.openURL(`tel:${phone.replace(/\s+/g, "")}`);
+  };
+
+  return (
+    <Screen>
+      <Banner title="Mi perfil" big />
+      {loading ? (
+        <LoadingView />
+      ) : error || !me ? (
+        <ErrorView message={error ?? "No pudimos cargar tu perfil."} onRetry={load} big />
+      ) : (
+        <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
+          <Card style={styles.header}>
+            <MaterialCommunityIcons name="account-circle" size={84} color={Colors.textPrimary} />
+            <View style={{ flex: 1 }}>
+              <Text style={styles.name}>{me.full_name}</Text>
+              {me.patient?.age != null && <Text style={styles.sub}>{me.patient.age} años</Text>}
+              {me.patient?.rut && <Text style={styles.sub}>RUT {me.patient.rut}</Text>}
             </View>
+          </Card>
 
-            <ScrollView style={styles.scroll} contentContainerStyle={styles.scrollContent}>
-                <View style={styles.contact}>
-                    <MaterialCommunityIcons name="account-circle-outline" size={60} color="#27695A" />
-                    <View style={styles.textBlock}>
-                        <Text style={styles.name}>{patient?.fullName}</Text>
-                        <Text style={styles.name}>{patient?.age} Años</Text>
-                    </View>
+          <SectionTitle big>Mis datos</SectionTitle>
+          <Card>
+            <InfoRow big icon="email-outline" label="Correo" value={me.email} />
+            <InfoRow big icon="phone-outline" label="Teléfono" value={me.patient?.phone || "No registrado"} />
+            <InfoRow big icon="map-marker-outline" label="Dirección" value={me.patient?.address || "No registrada"} />
+          </Card>
+
+          <SectionTitle big>Mi especialista</SectionTitle>
+          {me.patient?.specialists.length ? (
+            me.patient.specialists.map((s) => (
+              <Card key={s.id}>
+                <View style={styles.specialistRow}>
+                  <MaterialCommunityIcons name="stethoscope" size={44} color={Colors.btnTeal} />
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.specialistName}>{s.full_name}</Text>
+                    <Text style={styles.sub}>{s.specialty || "Especialista"}</Text>
+                    {s.phone && <Text style={styles.sub}>{s.phone}</Text>}
+                  </View>
                 </View>
+                {s.phone ? <Button title="Llamar" size="patient" icon="phone" variant="teal" onPress={() => call(s.phone)} style={{ marginTop: 12 }} /> : null}
+              </Card>
+            ))
+          ) : (
+            <Card>
+              <Text style={styles.sub}>Todavía no tienes un especialista asignado.</Text>
+            </Card>
+          )}
 
-                <Text style={styles.sectionLabel}>Información del contacto</Text>
-                <View style={styles.contact_info}>
-                    <View style={styles.item}>
-                        <MaterialCommunityIcons name="email-outline" size={30} color="#27695A" />
-                        <View style={styles.textBlock}>
-                            <Text style={styles.name_contact}>Correo Electrónico</Text>
-                            <Text style={styles.name_contact}>{patient?.email}</Text>
-                        </View>
-                    </View>
-                    <View style={styles.item}>
-                        <MaterialCommunityIcons name="phone-outline" size={30} color="#27695A" />
-                        <View style={styles.textBlock}>
-                            <Text style={styles.name_contact}>Teléfono</Text>
-                            <Text style={styles.name_contact}>{patient?.phone}</Text>
-                        </View>
-                    </View>
-                    <View style={styles.item}>
-                        <MaterialCommunityIcons name="map-marker-outline" size={30} color="#27695A" />
-                        <View style={styles.textBlock}>
-                            <Text style={styles.name_contact}>Dirección</Text>
-                            <Text style={styles.name_contact}>{patient?.address}</Text>
-                        </View>
-                    </View>
-                </View>
+          {appointment && (
+            <>
+              <SectionTitle big>Próxima cita</SectionTitle>
+              <Card>
+                <InfoRow big icon="calendar-clock" label="Cuándo" value={`${formatLongDate(appointment.date)}, ${appointment.time}`} />
+                <InfoRow big icon="account-outline" label="Con" value={appointment.specialistName} />
+              </Card>
+            </>
+          )}
 
-                <Text style={styles.sectionLabel}>Mi profesional de salud</Text>
-                <View style={styles.contact_info}>
-                    <View style={styles.item}>
-                        <MaterialCommunityIcons name="account-circle-outline" size={60} color="#27695A" />
-                        <View style={styles.textBlock}>
-                            <Text style={styles.name}>Dr Carlos Fernández</Text>
-                            <Text style={styles.name}>38 años</Text>
-                        </View>
-                    </View>
-                </View>
-            </ScrollView>
-
-            <PatientNavbar active="profile" />
-        </LinearGradient>
-    );
+          <Button title="Cambiar contraseña" size="patient" variant="outline" icon="lock-outline" onPress={() => setPasswordVisible(true)} style={{ marginTop: 8 }} />
+          <Button title="Cerrar sesión" size="patient" variant="danger" icon="logout" onPress={handleLogout} style={{ marginTop: 12 }} testID="logout" />
+        </ScrollView>
+      )}
+      <ChangePasswordModal
+        visible={passwordVisible}
+        onClose={() => setPasswordVisible(false)}
+        onSuccess={() => {
+          setPasswordVisible(false);
+          toast("Contraseña actualizada");
+        }}
+      />
+    </Screen>
+  );
 }
 
 const styles = StyleSheet.create({
-    container: {
-        flex: 1,
-    },
-    banner: {
-        width: '100%',
-        backgroundColor: '#49A2A5',
-        paddingTop: 50,
-        paddingBottom: 24,
-        paddingHorizontal: 20,
-        borderBottomLeftRadius: 24,
-        borderBottomRightRadius: 24,
-        borderTopLeftRadius: 0,
-        borderTopRightRadius: 0,
-    },
-    bannerTitle: {
-        fontSize: 24,
-        fontFamily: 'PromptBold',
-        color: '#DEEDE6',
-    },
-    scroll: {
-        flex: 1,
-    },
-    scrollContent: {
-        paddingTop: 16,
-        paddingBottom: 24,
-    },
-    sectionLabel: {
-        fontSize: 18,
-        fontFamily: 'PromptBold',
-        color: '#27695A',
-        paddingHorizontal: 20,
-        paddingTop: 8,
-        paddingBottom: 8,
-    },
-    item: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        marginBottom: 15,
-    },
-    textBlock: {
-        marginLeft: 10,
-        flex: 1,
-    },
-    contact: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'flex-start',
-        paddingHorizontal: 16,
-        paddingVertical: 16,
-        borderWidth: 2,
-        borderRadius: 20,
-        borderColor: '#49A2A5',
-        backgroundColor: '#DEEDE6',
-        marginHorizontal: 16,
-        marginTop: 16,
-    },
-    contact_info: {
-        marginHorizontal: 16,
-        marginBottom: 12,
-        borderWidth: 2,
-        borderRadius: 20,
-        padding: 20,
-        borderColor: '#49A2A5',
-        backgroundColor: '#DEEDE6',
-    },
-    name_contact: {
-        fontSize: 16,
-        marginLeft: 10,
-        fontFamily: 'PromptRegular',
-        color: '#27695A',
-    },
-    name: {
-        fontSize: 20,
-        marginLeft: 10,
-        fontFamily: 'PromptRegular',
-        color: '#27695A',
-    },
+  scroll: { padding: 16, paddingBottom: 32 },
+  header: { flexDirection: "row", alignItems: "center", gap: 14 },
+  name: { fontSize: FontSize.title, fontFamily: Fonts.bold, color: Colors.textPrimary },
+  sub: { fontSize: FontSize.patient.body, fontFamily: Fonts.regular, color: Colors.textPrimary, marginTop: 2 },
+  specialistRow: { flexDirection: "row", alignItems: "center", gap: 14 },
+  specialistName: { fontSize: FontSize.patient.body, fontFamily: Fonts.bold, color: Colors.textPrimary },
 });

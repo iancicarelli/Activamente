@@ -1,360 +1,144 @@
-import React, { useCallback, useEffect, useState } from "react";
-import {
-  View,
-  Text,
-  StyleSheet,
-  ScrollView,
-  TouchableOpacity,
-  ActivityIndicator,
-  Alert,
-} from "react-native";
-import { LinearGradient } from "expo-linear-gradient";
+// screens/specialist/RoutineListScreen.tsx — rutinas de un paciente: días, vigencia,
+// ejercicios y acciones Editar / Eliminar.
+import React, { useCallback, useState } from "react";
+import { ScrollView, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { MaterialCommunityIcons } from "@expo/vector-icons";
-import { useFonts } from "expo-font";
-import { useLocalSearchParams, useRouter } from "expo-router";
-import SpecialistNavbar from "../../components/SpecialistNavbar";
-import { BannerStyle, Colors, Fonts, GradientColors } from "../../constants/theme";
+import { useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
+import { Screen, Banner, Card, Button, Badge, LoadingView, EmptyState, ErrorView, confirm, useToast } from "../../components/ui";
+import { Colors, Fonts, FontSize } from "../../constants/theme";
 import { routes } from "../../router/routes";
-import {
-  deleteRoutine,
-  getRoutinesByPatient,
-  RoutineWithExercises,
-} from "../../services/routineService";
+import { deleteRoutine, getRoutinesByPatient, RoutineWithExercises } from "../../services/routineService";
+import { formatNumericDate, formatTime24, formatWeekdays, toDateString } from "../../utils/dates";
+import { getErrorMessage } from "../../utils/errors";
 
-// ─── Helpers ───────────────────────────────────────────────────────────────────
-
-// day_of_week del backend: 1 → Lunes … 7 → Domingo.
-const WEEKDAYS = [
-  "Lunes",
-  "Martes",
-  "Miércoles",
-  "Jueves",
-  "Viernes",
-  "Sábado",
-  "Domingo",
-];
-
-const dayName = (d: number): string => WEEKDAYS[d - 1] ?? "—";
-
-// start_date / end_date llegan como "YYYY-MM-DD"; se formatea sin construir un
-// Date para evitar corrimientos por zona horaria.
-const formatDate = (iso: string): string => {
-  if (!iso) return "—";
-  const [y, m, d] = iso.split("-");
-  return d && m && y ? `${d}/${m}/${y}` : iso;
+const isCurrent = (r: RoutineWithExercises) => {
+  const today = toDateString(new Date());
+  return r.start_date <= today && r.end_date >= today;
 };
 
-// ─── Screen ───────────────────────────────────────────────────────────────────
+function RoutineCard({ routine, deleting, onEdit, onDelete }: { routine: RoutineWithExercises; deleting: boolean; onEdit: () => void; onDelete: () => void }) {
+  return (
+    <Card>
+      <View style={styles.top}>
+        <View style={styles.icon}>
+          <MaterialCommunityIcons name="clipboard-list-outline" size={24} color={Colors.btnTeal} />
+        </View>
+        <View style={{ flex: 1 }}>
+          <Text style={styles.title}>{routine.name}</Text>
+          <Text style={styles.meta}>
+            {routine.exercises.length} {routine.exercises.length === 1 ? "ejercicio" : "ejercicios"} · {formatWeekdays(routine.days_of_week)}
+            {routine.scheduled_time ? ` ${formatTime24(routine.scheduled_time)}` : ""}
+          </Text>
+        </View>
+        <TouchableOpacity style={styles.editBtn} onPress={onEdit} disabled={deleting} accessibilityRole="button" accessibilityLabel="Editar rutina">
+          <MaterialCommunityIcons name="pencil-outline" size={20} color={Colors.textPrimary} />
+        </TouchableOpacity>
+        <TouchableOpacity style={styles.deleteBtn} onPress={onDelete} disabled={deleting} accessibilityRole="button" accessibilityLabel="Eliminar rutina">
+          <MaterialCommunityIcons name={deleting ? "progress-clock" : "trash-can-outline"} size={20} color={Colors.textOnDark} />
+        </TouchableOpacity>
+      </View>
+      <View style={styles.chips}>
+        <Badge label={`${formatNumericDate(routine.start_date)} – ${formatNumericDate(routine.end_date)}`} icon="calendar-range" tone="neutral" />
+        {isCurrent(routine) ? <Badge label="Vigente" tone="success" icon="check" /> : <Badge label="Fuera de fecha" tone="neutral" />}
+      </View>
+      <View style={styles.exercises}>
+        {routine.exercises.map((e) => (
+          <Text key={e.id} style={styles.exercise}>
+            • {e.exercise_id.replace(/_/g, " ")} · nivel {e.level} · {e.total_series}×{e.total_reps}
+            {e.rest_time_seconds ? ` · descanso ${e.rest_time_seconds} s` : ""}
+          </Text>
+        ))}
+      </View>
+    </Card>
+  );
+}
 
 export default function RoutineListScreen() {
   const router = useRouter();
-  const { patientId } = useLocalSearchParams<{ patientId: string }>();
-
+  const toast = useToast();
+  const { patientId } = useLocalSearchParams<{ patientId?: string }>();
   const [routines, setRoutines] = useState<RoutineWithExercises[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
 
-  const [fontsLoaded] = useFonts({
-    PromptRegular: require("../../assets/fonts/Prompt-Regular.ttf"),
-    PromptBold: require("../../assets/fonts/Prompt-SemiBold.ttf"),
-  });
-
-  const loadRoutines = useCallback(async () => {
+  const load = useCallback(async () => {
     if (!patientId) {
-      setError("No se recibió el paciente.");
+      setError("No se indicó el paciente.");
       setLoading(false);
       return;
     }
     setLoading(true);
     setError(null);
     try {
-      const data = await getRoutinesByPatient(patientId);
-      setRoutines(data);
-    } catch (e: any) {
-      setError(e?.message ?? "No se pudieron cargar las rutinas");
+      setRoutines(await getRoutinesByPatient(patientId));
+    } catch (e) {
+      setError(getErrorMessage(e));
     } finally {
       setLoading(false);
     }
   }, [patientId]);
 
-  useEffect(() => {
-    loadRoutines();
-  }, [loadRoutines]);
+  useFocusEffect(
+    useCallback(() => {
+      void load();
+    }, [load])
+  );
 
-  if (!fontsLoaded) return null;
-
-  const handleCreate = () => {
-    router.push({ pathname: routes.createRutine as any, params: { patientId } });
-  };
-
-  const handleDelete = (routine: RoutineWithExercises) => {
-    Alert.alert("¿Eliminar rutina?", `Se eliminará "${routine.name}".`, [
-      { text: "Cancelar", style: "cancel" },
-      {
-        text: "Eliminar",
-        style: "destructive",
-        onPress: async () => {
-          setDeletingId(routine.id);
-          try {
-            await deleteRoutine(routine.id);
-            await loadRoutines();
-          } catch (e: any) {
-            Alert.alert(
-              "Error",
-              e?.message ?? "No se pudo eliminar la rutina."
-            );
-          } finally {
-            setDeletingId(null);
-          }
-        },
-      },
-    ]);
+  const remove = async (r: RoutineWithExercises) => {
+    const ok = await confirm("¿Eliminar rutina?", `Se eliminará "${r.name}". Las sesiones ya realizadas se conservan.`, { confirmText: "Eliminar", destructive: true });
+    if (!ok) return;
+    setDeletingId(r.id);
+    try {
+      await deleteRoutine(r.id);
+      setRoutines((prev) => prev.filter((x) => x.id !== r.id));
+      toast("Rutina eliminada");
+    } catch (e) {
+      toast(getErrorMessage(e), "error");
+    } finally {
+      setDeletingId(null);
+    }
   };
 
   return (
-    <LinearGradient colors={GradientColors as any} style={styles.container}>
-      {/* ── Banner ── */}
-      <View style={styles.banner}>
-        <View style={styles.bannerRow}>
-          <View style={{ flex: 1 }}>
-            <Text style={styles.bannerSubtitle}>Panel Profesional</Text>
-            <Text style={styles.bannerTitle}>Rutinas del Paciente</Text>
-          </View>
-        </View>
-      </View>
-
-      <ScrollView
-        contentContainerStyle={styles.scrollContent}
-        showsVerticalScrollIndicator={false}
-      >
+    <Screen>
+      <Banner overline="Panel profesional" title="Rutinas del paciente" showBack />
+      <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
         {loading ? (
-          <ActivityIndicator
-            size="large"
-            color={Colors.textPrimary}
-            style={{ marginTop: 40 }}
-          />
+          <LoadingView />
         ) : error ? (
-          <Text style={styles.errorText}>{error}</Text>
+          <ErrorView message={error} onRetry={load} />
         ) : routines.length === 0 ? (
-          <Text style={styles.emptyText}>
-            Este paciente aún no tiene rutinas asignadas.
-          </Text>
+          <EmptyState icon="clipboard-plus-outline" title="Sin rutinas" message="Crea la primera rutina para este paciente." />
         ) : (
           routines.map((r) => (
             <RoutineCard
               key={r.id}
               routine={r}
               deleting={deletingId === r.id}
-              onDelete={() => handleDelete(r)}
+              onEdit={() => router.push({ pathname: routes.createRoutine, params: { patientId: r.patient_id, routineId: r.id } })}
+              onDelete={() => remove(r)}
             />
           ))
         )}
       </ScrollView>
-
-      <TouchableOpacity
-        style={styles.primaryCta}
-        onPress={handleCreate}
-        activeOpacity={0.85}
-      >
-        <MaterialCommunityIcons
-          name="plus-circle-outline"
-          size={20}
-          color={Colors.textOnDark}
-        />
-        <Text style={styles.primaryCtaText}>Crear rutina</Text>
-      </TouchableOpacity>
-
-      <SpecialistNavbar active="patients" />
-    </LinearGradient>
+      <View style={styles.footer}>
+        <Button title="Crear rutina" icon="plus-circle-outline" onPress={() => router.push({ pathname: routes.createRoutine, params: { patientId: patientId ?? "" } })} />
+      </View>
+    </Screen>
   );
 }
-
-// ─── Sub-components ───────────────────────────────────────────────────────────
-
-function RoutineCard({
-  routine,
-  deleting,
-  onDelete,
-}: {
-  routine: RoutineWithExercises;
-  deleting: boolean;
-  onDelete: () => void;
-}) {
-  return (
-    <View style={styles.card}>
-      <View style={styles.cardTop}>
-        <View style={styles.cardIconWrap}>
-          <MaterialCommunityIcons
-            name="clipboard-list-outline"
-            size={22}
-            color={Colors.btnTeal}
-          />
-        </View>
-        <View style={{ flex: 1 }}>
-          <Text style={styles.cardTitle}>{routine.name}</Text>
-          <Text style={styles.cardMeta}>
-            {routine.exercises.length} ejercicios
-          </Text>
-        </View>
-        <TouchableOpacity
-          style={styles.deleteBtn}
-          onPress={onDelete}
-          disabled={deleting}
-          activeOpacity={0.8}
-          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-        >
-          {deleting ? (
-            <ActivityIndicator size="small" color={Colors.textOnDark} />
-          ) : (
-            <MaterialCommunityIcons
-              name="trash-can-outline"
-              size={18}
-              color={Colors.textOnDark}
-            />
-          )}
-        </TouchableOpacity>
-      </View>
-
-      <View style={styles.cardInfoRow}>
-        <View style={styles.infoChip}>
-          <MaterialCommunityIcons
-            name="calendar-week-outline"
-            size={14}
-            color={Colors.btnTeal}
-          />
-          <Text style={styles.infoChipText}>{dayName(routine.day_of_week)}</Text>
-        </View>
-        <View style={styles.infoChip}>
-          <MaterialCommunityIcons
-            name="calendar-range"
-            size={14}
-            color={Colors.btnTeal}
-          />
-          <Text style={styles.infoChipText}>
-            {formatDate(routine.start_date)} – {formatDate(routine.end_date)}
-          </Text>
-        </View>
-      </View>
-    </View>
-  );
-}
-
-// ─── Styles ───────────────────────────────────────────────────────────────────
 
 const styles = StyleSheet.create({
-  container: { flex: 1 },
-  scrollContent: { paddingHorizontal: 16, paddingTop: 16, paddingBottom: 32 },
-
-  // ── Banner ──
-  banner: { ...BannerStyle },
-  bannerRow: { flexDirection: "row", alignItems: "center" },
-  bannerSubtitle: {
-    fontSize: 14,
-    fontFamily: Fonts.regular,
-    color: Colors.bannerSubtitle,
-    marginBottom: 4,
-  },
-  bannerTitle: {
-    fontSize: 24,
-    fontFamily: Fonts.bold,
-    color: Colors.bannerTitle,
-  },
-
-  // ── Card ──
-  card: {
-    backgroundColor: Colors.cardBg,
-    borderRadius: 14,
-    borderWidth: 1,
-    borderColor: Colors.btnTeal,
-    padding: 14,
-    marginBottom: 12,
-  },
-  cardTop: {
-    flexDirection: "row",
-    alignItems: "center",
-    marginBottom: 12,
-  },
-  cardIconWrap: {
-    width: 42,
-    height: 42,
-    borderRadius: 12,
-    backgroundColor: Colors.cardBgAlt,
-    alignItems: "center",
-    justifyContent: "center",
-    marginRight: 12,
-  },
-  deleteBtn: {
-    backgroundColor: Colors.btnDanger,
-    borderRadius: 8,
-    width: 34,
-    height: 34,
-    alignItems: "center",
-    justifyContent: "center",
-    marginLeft: 8,
-  },
-  cardTitle: {
-    fontSize: 15,
-    fontFamily: Fonts.bold,
-    color: Colors.textPrimary,
-  },
-  cardMeta: {
-    fontSize: 12,
-    fontFamily: Fonts.regular,
-    color: Colors.textSecondary,
-    marginTop: 2,
-  },
-  cardInfoRow: {
-    flexDirection: "row",
-    flexWrap: "wrap",
-    gap: 8,
-  },
-  infoChip: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 4,
-    backgroundColor: Colors.cardBgAlt,
-    borderRadius: 8,
-    paddingHorizontal: 10,
-    paddingVertical: 5,
-  },
-  infoChipText: {
-    fontSize: 12,
-    fontFamily: Fonts.regular,
-    color: Colors.textPrimary,
-  },
-
-  // ── Estados ──
-  errorText: {
-    marginTop: 40,
-    textAlign: "center",
-    fontSize: 14,
-    fontFamily: Fonts.regular,
-    color: Colors.btnDanger,
-  },
-  emptyText: {
-    marginTop: 40,
-    textAlign: "center",
-    fontSize: 14,
-    fontFamily: Fonts.regular,
-    color: Colors.textSecondary,
-  },
-
-  // ── Primary CTA ──
-  primaryCta: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: 8,
-    backgroundColor: Colors.btnPrimary,
-    borderRadius: 12,
-    paddingVertical: 14,
-    marginHorizontal: 16,
-    marginBottom: 12,
-  },
-  primaryCtaText: {
-    fontSize: 15,
-    fontFamily: Fonts.bold,
-    color: Colors.textOnDark,
-  },
+  scroll: { padding: 16, paddingBottom: 24 },
+  footer: { padding: 16, paddingTop: 0 },
+  top: { flexDirection: "row", alignItems: "center", gap: 12 },
+  icon: { width: 44, height: 44, borderRadius: 12, backgroundColor: Colors.cardBgAlt, alignItems: "center", justifyContent: "center" },
+  title: { fontSize: FontSize.md, fontFamily: Fonts.bold, color: Colors.textPrimary },
+  meta: { fontSize: FontSize.sm, fontFamily: Fonts.regular, color: Colors.textSecondary, marginTop: 2 },
+  editBtn: { width: 40, height: 40, borderRadius: 10, backgroundColor: Colors.cardBgAlt, borderWidth: 1, borderColor: Colors.border, alignItems: "center", justifyContent: "center" },
+  deleteBtn: { width: 40, height: 40, borderRadius: 10, backgroundColor: Colors.btnDanger, alignItems: "center", justifyContent: "center" },
+  chips: { flexDirection: "row", flexWrap: "wrap", gap: 6, marginTop: 10 },
+  exercises: { marginTop: 10, gap: 2 },
+  exercise: { fontSize: FontSize.sm, fontFamily: Fonts.regular, color: Colors.textPrimary, textTransform: "capitalize" },
 });

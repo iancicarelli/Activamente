@@ -1,81 +1,85 @@
-from datetime import datetime
-from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy.orm import Session as DBSession
 from uuid import UUID
 
-from app.database import get_db
-from app.core.deps import get_current_user
-from app.models.user_model import User
-from app.models.session_model import Session as SessionModel
-from app.models.session_exercise_model import SessionExercise
-from app.models.routine_model import RoutineExercise
-from app.schemas.session_schema import SessionCreate, SessionResponse
-from app.schemas.session_exercise_schema import SessionExerciseUpdate, SessionExerciseResponse
+from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy import func
+from sqlalchemy.orm import Session as DBSession
+from sqlalchemy.orm import joinedload
 
-router = APIRouter(
-    prefix="/api/sessions",
-    tags=["sessions"]
-)
+from app.core.authz import assert_patient_access, get_session_for_user
+from app.core.deps import get_current_user
+from app.database import get_db
+from app.models.routine_model import Routine, RoutineExercise
+from app.models.session_exercise_model import SessionExercise
+from app.models.session_model import Session as SessionModel
+from app.models.user_model import User, UserRole
+from app.schemas.session_exercise_schema import SessionExerciseResponse, SessionExerciseUpdate
+from app.schemas.session_schema import SessionCreate, SessionResponse
+
+router = APIRouter(prefix="/api/sessions", tags=["sessions"])
+
+
+def _sort_exercises(db: DBSession, session: SessionModel) -> SessionModel:
+    """Ordena session_exercises por el order_index de la rutina (la relationship
+    ordena por id, que es un UUID aleatorio). Los que ya no tienen
+    routine_exercise (rutina borrada) van al final."""
+    ids = [se.routine_exercise_id for se in session.session_exercises if se.routine_exercise_id]
+    order = {}
+    if ids:
+        order = dict(db.query(RoutineExercise.id, RoutineExercise.order_index).filter(RoutineExercise.id.in_(ids)).all())
+    session.session_exercises.sort(key=lambda se: (order.get(se.routine_exercise_id, 10_000), str(se.id)))
+    return session
+
+
+def _load(db: DBSession, session_id: UUID) -> SessionModel:
+    session = (
+        db.query(SessionModel).options(joinedload(SessionModel.session_exercises)).filter(SessionModel.id == session_id).first()
+    )
+    return _sort_exercises(db, session)
 
 
 @router.post("", response_model=SessionResponse, status_code=status.HTTP_201_CREATED)
 def create_session(
-    session_data: SessionCreate,
+    body: SessionCreate,
     db: DBSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     """
-    Crea un nuevo registro de sesión para un paciente y su rutina.
-    La fecha se asigna automáticamente (DEFAULT NOW()) y la sesión
-    arranca como no completada (is_completed = False).
+    Crea la sesión y, en la MISMA transacción, una fila session_exercises por
+    cada routine_exercise de la rutina (orden order_index) con contadores en 0.
 
-    Además, en la misma operación, genera una fila session_exercises por cada
-    routine_exercise de la rutina (en orden order_index), con contadores en 0.
-    Así el frontend recibe ids reales de session_exercises para el PUT de
-    progreso, en vez de depender de ids sembrados. Si la rutina no tiene
-    ejercicios, la sesión queda válida igual (lista vacía).
+    patient_id: si el token es PATIENT se usa el propio id (el body se ignora);
+    especialista/admin deben tener acceso al paciente. La rutina debe ser de ese
+    paciente (EP-02).
     """
-    new_session = SessionModel(
-        patient_id=session_data.patient_id,
-        routine_id=session_data.routine_id,
-        duration_minutes=session_data.duration_minutes,
-        is_completed=False,
-    )
+    if current_user.role == UserRole.PATIENT:
+        patient_id = current_user.id
+    else:
+        if body.patient_id is None:
+            raise HTTPException(status_code=422, detail="Falta patient_id.")
+        patient_id = assert_patient_access(db, current_user, body.patient_id)
 
+    routine = db.query(Routine).filter(Routine.id == body.routine_id).first()
+    if not routine:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Rutina no encontrada.")
+    if routine.patient_id != patient_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Esa rutina no pertenece al paciente.")
+
+    new_session = SessionModel(patient_id=patient_id, routine_id=routine.id, is_completed=False)
+    routine_exercises = (
+        db.query(RoutineExercise).filter(RoutineExercise.routine_id == routine.id).order_by(RoutineExercise.order_index).all()
+    )
+    for re_ in routine_exercises:
+        new_session.session_exercises.append(
+            SessionExercise(
+                exercise_id=re_.exercise_id,
+                routine_exercise_id=re_.id,
+                series_completed=0,
+                reps_completed=0,
+            )
+        )
     db.add(new_session)
     db.commit()
-    db.refresh(new_session)
-
-    routine_exercises = (
-        db.query(RoutineExercise)
-        .filter(RoutineExercise.routine_id == session_data.routine_id)
-        .order_by(RoutineExercise.order_index)
-        .all()
-    )
-
-    session_exercises = []
-    for routine_exercise in routine_exercises:
-        session_exercise = SessionExercise(
-            session_id=new_session.id,
-            exercise_id=routine_exercise.exercise_id,
-            routine_exercise_id=routine_exercise.id,
-            series_completed=0,
-            reps_completed=0,
-            accuracy_score=None,
-            feedback=None,
-        )
-        db.add(session_exercise)
-        session_exercises.append(session_exercise)
-
-    db.commit()
-    for session_exercise in session_exercises:
-        db.refresh(session_exercise)
-
-    # Adjuntamos la lista al objeto para que SessionResponse la serialice
-    # (SessionModel no tiene relationship con session_exercises a nivel ORM).
-    new_session.session_exercises = session_exercises
-
-    return new_session
+    return _load(db, new_session.id)
 
 
 @router.get("/{session_id}", response_model=SessionResponse)
@@ -84,23 +88,9 @@ def get_session(
     db: DBSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """
-    Devuelve una sesión con sus session_exercises (incluye series_completed /
-    reps_completed reales). La pantalla de resumen final lo usa para mostrar
-    ejercicios completados, series totales y duración sin datos hardcodeados.
-    SessionModel no tiene relationship ORM con session_exercises, asi que la
-    lista se adjunta a mano (mismo patron que create_session).
-    """
-    session = db.query(SessionModel).filter(SessionModel.id == session_id).first()
-    if not session:
-        raise HTTPException(status_code=404, detail="Session not found")
-
-    session.session_exercises = (
-        db.query(SessionExercise)
-        .filter(SessionExercise.session_id == session_id)
-        .all()
-    )
-    return session
+    """Sesión con sus session_exercises (progreso real). Solo el dueño / su especialista / admin."""
+    get_session_for_user(db, current_user, session_id)
+    return _load(db, session_id)
 
 
 @router.post("/{session_id}/complete", response_model=SessionResponse)
@@ -110,60 +100,47 @@ def complete_session(
     current_user: User = Depends(get_current_user),
 ):
     """
-    Marca una sesión existente como completada (is_completed = True) y calcula
-    su duración en minutos.
+    Marca la sesión como completada. IDEMPOTENTE (EP-08): si ya estaba
+    completada no recalcula la duración. La resta se hace con NOW() de la DB.
     """
-    session = db.query(SessionModel).filter(SessionModel.id == session_id).first()
-
-    if not session:
-        raise HTTPException(status_code=404, detail="Session not found")
-
-    session.is_completed = True
-
-    # Duración = minutos entre la creación de la sesión y ahora. El timestamp de
-    # creación es sessions.date (server_default NOW(); la tabla no tiene
-    # created_at). La columna es TIMESTAMP WITHOUT TIME ZONE y la DB corre en UTC,
-    # igual que datetime.utcnow() → ambos naive-UTC, la resta es directa.
-    # max(0, ...) evita negativos por un eventual skew de reloj.
-    if session.date:
-        elapsed_minutes = (datetime.utcnow() - session.date).total_seconds() / 60
-        session.duration_minutes = max(0, round(elapsed_minutes))
-
-    db.commit()
-    db.refresh(session)
-
-    return session
+    session = get_session_for_user(db, current_user, session_id)
+    if not session.is_completed:
+        now = db.query(func.now()).scalar()
+        session.is_completed = True
+        session.completed_at = now
+        if session.date:
+            elapsed = (now - session.date).total_seconds() / 60
+            session.duration_minutes = max(0, round(elapsed))
+        db.commit()
+    return _load(db, session_id)
 
 
 @router.put("/{session_id}/exercises/{session_exercise_id}", response_model=SessionExerciseResponse)
 def update_exercise_progress(
     session_id: UUID,
     session_exercise_id: UUID,
-    exercise_data: SessionExerciseUpdate,
+    body: SessionExerciseUpdate,
     db: DBSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """
-    Actualiza el total de series y repeticiones completadas para un ejercicio en una sesión.
-    Se debe llamar desde el Frontend cuando el usuario presiona 'Terminar' el ejercicio.
-    """
-    # Buscar el registro del ejercicio en la sesión
-    session_exercise = db.query(SessionExercise).filter(SessionExercise.id == session_exercise_id).first()
-
+    """Persiste series/reps (y opcionalmente accuracy_score/feedback) de un ejercicio.
+    Verifica que el session_exercise pertenezca a la sesión (EP-02)."""
+    get_session_for_user(db, current_user, session_id)
+    session_exercise = (
+        db.query(SessionExercise)
+        .filter(SessionExercise.id == session_exercise_id, SessionExercise.session_id == session_id)
+        .first()
+    )
     if not session_exercise:
-        raise HTTPException(status_code=404, detail="Exercise for this session not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Ese ejercicio no pertenece a la sesión.")
 
-    # Actualizar los totales
-    session_exercise.series_completed = exercise_data.series_completed
-    session_exercise.reps_completed = exercise_data.reps_completed
-
-    if exercise_data.accuracy_score is not None:
-        session_exercise.accuracy_score = exercise_data.accuracy_score
-
-    if exercise_data.feedback is not None:
-        session_exercise.feedback = exercise_data.feedback
+    session_exercise.series_completed = body.series_completed
+    session_exercise.reps_completed = body.reps_completed
+    if body.accuracy_score is not None:
+        session_exercise.accuracy_score = body.accuracy_score
+    if body.feedback is not None:
+        session_exercise.feedback = body.feedback
 
     db.commit()
     db.refresh(session_exercise)
-
     return session_exercise

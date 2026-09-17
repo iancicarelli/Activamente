@@ -48,7 +48,8 @@
         {
           "cameraPermissionText": "ActivaMente necesita la cámara para evaluar los ejercicios en tiempo real."
         }
-      ]
+      ],
+      "expo-secure-store"
     ],
     "experiments": {
       "typedRoutes": true,

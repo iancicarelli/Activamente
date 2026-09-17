@@ -1,0 +1,32 @@
+appId: com.activamente.app
+name: Especialista - crear rutina y agendar
+---
+- launchApp:
+    clearState: true
+- tapOn:
+    id: login-identifier
+- inputText: "maria.gonzalez@activamente.cl"
+- tapOn:
+    id: login-password
+- inputText: "Specialist1234!"
+- tapOn:
+    id: login-submit
+- assertVisible: "Hola, María González"
+- tapOn: "Pacientes"
+- assertVisible: "Pedro Soto"
+- tapOn: "Rutinas"
+- tapOn: "Crear rutina"
+- tapOn: "Ej: Rehabilitación lumbar"
+- inputText: "Rutina E2E"
+- hideKeyboard
+- tapOn: "Agregar"
+- tapOn:
+    id: save-routine
+- assertVisible: "Rutina E2E"
+- back
+- tapOn: "Ficha"
+- tapOn: "Agendar"
+- tapOn: "08:00"
+- tapOn:
+    id: confirm-appointment
+- assertVisible: "Calendario"

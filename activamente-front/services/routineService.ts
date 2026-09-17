@@ -1,16 +1,13 @@
 // services/routineService.ts
-//
-// Cliente de los endpoints de rutinas del backend:
-//   POST /api/routines                       (crea rutina + ejercicios)
-//   GET  /api/routines?patient_id={uuid}     (rutinas de un paciente)
-//
-// Sigue el patrón de authService.ts: usa apiFetch (auth: true por defecto), que
-// adjunta el Bearer token desde authStore. El backend toma specialist_id del
-// token, por eso no se envía en el body.
-
+//   POST   /api/routines
+//   PUT    /api/routines/{id}                 (editar; ejercicios se sincronizan por exercise_id)
+//   GET    /api/routines?patient_id=
+//   GET    /api/routines/{id}
+//   GET    /api/routines/active?patient_id=   (404 → null)
+//   GET    /api/routines/next?patient_id=     (EP-05)
+//   DELETE /api/routines/{id}
 import { apiFetch, ApiError } from "./apiClient";
 
-// Un ejercicio dentro del body de creación (RoutineExerciseCreate).
 export interface RoutineExerciseCreate {
   exercise_id: string;
   order_index: number;
@@ -21,32 +18,19 @@ export interface RoutineExerciseCreate {
   time_limit_seconds?: number | null;
 }
 
-// Body de POST /api/routines (RoutineCreate). Las fechas/horas viajan como
-// strings ISO ("2026-06-13" para date, "10:30:00" para time).
-export interface RoutineCreate {
-  patient_id: string;
+export interface RoutineUpdate {
   name: string;
-  start_date: string;
-  end_date: string;
-  day_of_week: number;
-  scheduled_time: string;
+  start_date: string;      // YYYY-MM-DD
+  end_date: string;        // YYYY-MM-DD
+  days_of_week: number[];  // 1 lunes … 7 domingo, al menos uno
+  scheduled_time: string | null;  // HH:MM:SS
   exercises: RoutineExerciseCreate[];
 }
 
-// Forma base de una rutina devuelta por el backend (RoutineResponse).
-export interface Routine {
-  id: string;
-  specialist_id: string;
+export interface RoutineCreate extends RoutineUpdate {
   patient_id: string;
-  name: string;
-  start_date: string;
-  end_date: string;
-  day_of_week: number;
-  scheduled_time: string;
-  created_at: string;
 }
 
-// Ejercicio anidado en la respuesta con ejercicios (RoutineExerciseResponse).
 export interface RoutineExercise {
   id: string;
   exercise_id: string;
@@ -58,54 +42,64 @@ export interface RoutineExercise {
   time_limit_seconds: number | null;
 }
 
-// GET /api/routines devuelve la rutina con sus ejercicios anidados.
+export interface Routine {
+  id: string;
+  specialist_id: string | null;
+  patient_id: string;
+  name: string;
+  start_date: string;
+  end_date: string;
+  days_of_week: number[];
+  scheduled_time: string | null;
+  created_at: string | null;
+}
+
 export interface RoutineWithExercises extends Routine {
   exercises: RoutineExercise[];
 }
 
-// POST /api/routines → crea una rutina y sus ejercicios en una transacción.
-export const createRoutine = (data: RoutineCreate): Promise<Routine> =>
-  apiFetch<Routine>("/api/routines", {
-    method: "POST",
-    auth: true,
-    body: data,
-  });
+export interface NextRoutine {
+  routine: RoutineWithExercises | null;
+  next_date: string | null;
+  is_today: boolean;
+  days_until: number | null;
+}
 
-// DELETE /api/routines/{routineId} → hard delete de la rutina (CASCADE en
-// routine_exercises). El backend responde 204 sin body.
+const sortExercises = (r: RoutineWithExercises): RoutineWithExercises => ({
+  ...r,
+  exercises: [...r.exercises].sort((a, b) => a.order_index - b.order_index),
+});
+
+export const createRoutine = (data: RoutineCreate): Promise<RoutineWithExercises> =>
+  apiFetch<RoutineWithExercises>("/api/routines", { method: "POST", body: data }).then(sortExercises);
+
+export const updateRoutine = (routineId: string, data: RoutineUpdate): Promise<RoutineWithExercises> =>
+  apiFetch<RoutineWithExercises>(`/api/routines/${encodeURIComponent(routineId)}`, { method: "PUT", body: data }).then(sortExercises);
+
 export const deleteRoutine = (routineId: string): Promise<void> =>
-  apiFetch<void>(`/api/routines/${encodeURIComponent(routineId)}`, {
-    method: "DELETE",
-    auth: true,
-  });
+  apiFetch<void>(`/api/routines/${encodeURIComponent(routineId)}`, { method: "DELETE" });
 
-// GET /api/routines?patient_id={patientId} → rutinas del paciente.
-export const getRoutinesByPatient = (
-  patientId: string
-): Promise<RoutineWithExercises[]> =>
-  apiFetch<RoutineWithExercises[]>(
-    `/api/routines?patient_id=${encodeURIComponent(patientId)}`,
-    {
-      method: "GET",
-      auth: true,
-    }
+export const getRoutinesByPatient = (patientId: string): Promise<RoutineWithExercises[]> =>
+  apiFetch<RoutineWithExercises[]>(`/api/routines?patient_id=${encodeURIComponent(patientId)}`).then((rs) =>
+    rs.map(sortExercises)
   );
 
-// GET /api/routines/active?patient_id={patientId} → rutina vigente para HOY.
-// El backend responde 404 ("Sin rutina activa para hoy") cuando no hay ninguna;
-// eso es un estado valido, no un error, asi que lo traducimos a null.
-export const getActiveRoutine = async (
-  patientId: string
-): Promise<RoutineWithExercises | null> => {
+export const getRoutineById = (routineId: string): Promise<RoutineWithExercises> =>
+  apiFetch<RoutineWithExercises>(`/api/routines/${encodeURIComponent(routineId)}`).then(sortExercises);
+
+export const getActiveRoutine = async (patientId: string): Promise<RoutineWithExercises | null> => {
   try {
-    return await apiFetch<RoutineWithExercises>(
-      `/api/routines/active?patient_id=${encodeURIComponent(patientId)}`,
-      { method: "GET", auth: true }
+    return sortExercises(
+      await apiFetch<RoutineWithExercises>(`/api/routines/active?patient_id=${encodeURIComponent(patientId)}`)
     );
   } catch (e) {
-    if (e instanceof ApiError && e.status === 404) {
-      return null;
-    }
+    if (e instanceof ApiError && e.status === 404) return null;
     throw e;
   }
 };
+
+export const getNextRoutine = (patientId: string): Promise<NextRoutine> =>
+  apiFetch<NextRoutine>(`/api/routines/next?patient_id=${encodeURIComponent(patientId)}`).then((n) => ({
+    ...n,
+    routine: n.routine ? sortExercises(n.routine) : null,
+  }));

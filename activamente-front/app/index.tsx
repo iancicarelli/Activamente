@@ -1,7 +1,6 @@
-// app/index.tsx
-// The app now opens directly on the login screen.
+import React from "react";
 import LoginScreen from "../screens/LoginScreen";
 
-export default function Index() {
+export default function Route() {
   return <LoginScreen />;
 }

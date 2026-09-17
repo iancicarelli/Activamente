@@ -1,0 +1,54 @@
+appId: com.activamente.app
+name: Paciente - sesión completa
+---
+- launchApp:
+    clearState: true
+- tapOn:
+    id: login-identifier
+- inputText: "98765432-5"
+- tapOn:
+    id: login-password
+- inputText: "Patient1234!"
+- tapOn:
+    id: login-submit
+- assertVisible: "Hola, Pedro"
+- tapOn:
+    id: start-training
+# Encuesta previa: 3 preguntas + comentarios
+- repeat:
+    times: 3
+    commands:
+      - tapOn:
+          id: scale-option-2
+      - tapOn:
+          id: survey-next
+- tapOn:
+    id: survey-submit
+- assertVisible: "Ejercicio 1 de 4"
+- tapOn:
+    id: instruction-start
+# Cámara: saltamos cada ejercicio hasta la encuesta final
+- repeat:
+    times: 4
+    commands:
+      - tapOn: "Saltar ejercicio"
+      - tapOn: "Saltar"
+      - runFlow:
+          when:
+            visible: "Iniciar ejercicio"
+          commands:
+            - tapOn:
+                id: instruction-start
+- assertVisible: "¡Terminaste!"
+- tapOn:
+    id: scale-option-4
+- tapOn:
+    id: post-next
+- tapOn:
+    id: scale-option-1
+- tapOn:
+    id: post-submit
+- assertVisible: "Sesión completada"
+- tapOn:
+    id: completed-done
+- assertVisible: "Mi historial"

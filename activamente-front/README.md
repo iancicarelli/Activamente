@@ -8,5 +8,9 @@ npm install
 cp .env.example .env          # EXPO_PUBLIC_API_URL = http://<IP-de-tu-PC>:8420
 npm run android               # compila e instala el dev build (Metro en :8421)
 npm start                     # Metro en :8421 (-- -c para limpiar caché tras cambiar .env)
-npm run typecheck && npm run lint
+npm run typecheck && npm run lint && npm test
 ```
+
+Los pasos completos para conectar el teléfono, abrir los puertos del PC y verificar la
+conexión con el backend están en el [README de la raíz](../README.md).
+

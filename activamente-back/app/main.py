@@ -1,37 +1,58 @@
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from app.routers import auth
-from app.routers import users
-from app.routers import patients
-from app.routers import specialists
-from app.routers import admins
-from app.routers import exercises_library
-from app.routers import routines
-from app.routers import sessions
-from app.routers import surveys
-from app.routers import appointments
+from sqlalchemy import text
+from sqlalchemy.orm import Session
 
-app = FastAPI()
+from app.database import get_db
+from app.routers import (
+    admins,
+    appointments,
+    auth,
+    exercises_library,
+    me,
+    patients,
+    routines,
+    sessions,
+    specialists,
+    surveys,
+    users,
+)
 
+app = FastAPI(title="ActivaMente API", version="1.1.0")
+
+# allow_origins=["*"] con allow_credentials=True es una combinación inválida para
+# navegadores (HC-14). La app móvil no usa cookies, así que credentials=False.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_credentials=True,
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-app.include_router(auth.router)
-app.include_router(users.router)
-app.include_router(patients.router)
-app.include_router(specialists.router)
-app.include_router(admins.router)
-app.include_router(exercises_library.router)
-app.include_router(routines.router)
-app.include_router(sessions.router)
-app.include_router(surveys.router)
-app.include_router(appointments.router)
+for router in (
+    auth.router,
+    me.router,
+    users.router,
+    patients.router,
+    specialists.router,
+    admins.router,
+    exercises_library.router,
+    routines.router,
+    sessions.router,
+    surveys.router,
+    appointments.router,
+):
+    app.include_router(router)
 
-@app.get("/")
-async def root():
-    return {"message": "Hello World"}
+
+@app.get("/", tags=["health"])
+def root():
+    return {"name": "ActivaMente API", "docs": "/docs", "health": "/health"}
+
+
+@app.get("/health", tags=["health"])
+def health(db: Session = Depends(get_db)):
+    """Comprueba la conexión a la base (SELECT 1)."""
+    db.execute(text("SELECT 1"))
+    return {"status": "ok"}

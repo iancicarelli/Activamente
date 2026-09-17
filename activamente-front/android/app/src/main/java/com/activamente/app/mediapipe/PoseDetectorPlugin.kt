@@ -3,6 +3,7 @@ package com.activamente.app.mediapipe
 import android.graphics.Bitmap
 import android.media.Image
 import android.util.Log
+import com.activamente.app.BuildConfig
 import com.google.mediapipe.framework.image.BitmapImageBuilder
 import com.google.mediapipe.tasks.core.BaseOptions
 import com.google.mediapipe.tasks.vision.core.RunningMode
@@ -35,10 +36,20 @@ class PoseDetectorPlugin(
     private var cachedArgb: IntArray? = null
     private var cachedBitmap: Bitmap? = null
 
+    // Log de rendimiento: solo en builds debug y 1 de cada LOG_EVERY frames (EX-01).
+    private var frameCounter: Long = 0L
+
     init {
         val context = proxy.context
+        // EX-02: `lite` es ~2-3x más rápido que `full` y alcanza para ángulos
+        // articulares gruesos. Se puede forzar `full` desde JS:
+        //   VisionCameraProxy.initFrameProcessorPlugin("detectPose", { model: "full" })
+        val modelName = when (options?.get("model")?.toString()) {
+            "full" -> "pose_landmarker_full.task"
+            else -> "pose_landmarker_lite.task"
+        }
         val baseOptions = BaseOptions.builder()
-            .setModelAssetPath("pose_landmarker_full.task") // placed in android/app/src/main/assets/
+            .setModelAssetPath(modelName) // android/app/src/main/assets/
             .build()
         val landmarkerOptions = PoseLandmarker.PoseLandmarkerOptions.builder()
             .setBaseOptions(baseOptions)
@@ -69,11 +80,14 @@ class PoseDetectorPlugin(
         val result = poseLandmarker.detectForVideo(mpImage, timestampMs)
         val detMs = (System.nanoTime() - detStartNs) / 1_000_000.0
 
-        Log.d(
-            TAG,
-            "frame ts=${timestampMs}ms yuv→bitmap=${"%.2f".format(convMs)}ms " +
-                "detectForVideo=${"%.2f".format(detMs)}ms",
-        )
+        frameCounter++
+        if (BuildConfig.DEBUG && frameCounter % LOG_EVERY == 0L) {
+            Log.d(
+                TAG,
+                "frame ts=${timestampMs}ms yuv→bitmap=${"%.2f".format(convMs)}ms " +
+                    "detectForVideo=${"%.2f".format(detMs)}ms",
+            )
+        }
 
         val landmarks = result.landmarks().firstOrNull() ?: return emptyList<Any>()
 
@@ -188,6 +202,7 @@ class PoseDetectorPlugin(
 
     companion object {
         private const val TAG = "PosePerf"
+        private const val LOG_EVERY = 30L
 
         fun register() {
             FrameProcessorPluginRegistry.addFrameProcessorPlugin("detectPose") { proxy, options ->

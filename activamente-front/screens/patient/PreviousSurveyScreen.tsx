@@ -1,210 +1,119 @@
+// screens/patient/PreviousSurveyScreen.tsx — encuesta previa: una pregunta por
+// paso con 5 opciones grandes (UX-13). Crea la sesión y guarda la encuesta; si
+// falla muestra el error y permite reintentar SIN navegar (BT-03).
 import React, { useState } from "react";
-import {
-  View,
-  Text,
-  StyleSheet,
-  TouchableOpacity,
-  Image,
-  TextInput,
-  KeyboardAvoidingView,
-  ScrollView,
-  Platform,
-  ActivityIndicator,
-} from "react-native";
-import { LinearGradient } from "expo-linear-gradient";
-import { MaterialCommunityIcons } from "@expo/vector-icons";
-import { useFonts } from "expo-font";
-import SurveySlider from "../../components/SurveySlider";
-import { useRouter, useLocalSearchParams } from 'expo-router';
+import { KeyboardAvoidingView, Platform, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
+import { useLocalSearchParams, useRouter } from "expo-router";
+import { Screen, Banner, Button, InlineError } from "../../components/ui";
+import { NEGATIVE_SCALE, ScaleOptions } from "../../components/ScaleOptions";
+import { Colors, Fonts, FontSize } from "../../constants/theme";
+import { routes } from "../../router/routes";
 import { createSession } from "../../services/sessionService";
 import { submitPreSurvey } from "../../services/surveyService";
-import { getSession } from "../../services/authStore";
+import { getErrorMessage } from "../../utils/errors";
+
+const QUESTIONS = [
+  { key: "pain", title: "¿Tienes dolor hoy?", options: NEGATIVE_SCALE("dolor") },
+  { key: "fatigue", title: "¿Qué tan cansado te sientes?", options: NEGATIVE_SCALE("cansancio") },
+  { key: "stress", title: "¿Qué tan estresado te sientes?", options: NEGATIVE_SCALE("estrés") },
+] as const;
+
+type Key = (typeof QUESTIONS)[number]["key"];
 
 export default function PreviousSurveyScreen() {
   const router = useRouter();
-  // routineId llega como query param desde PatientHome; patientId del paciente
-  // logueado en el authStore.
   const { routineId } = useLocalSearchParams<{ routineId?: string }>();
-  const patientId = getSession()?.patient?.id;
-
-  const [effort, setEffort] = useState(4);
-  const [tiredness, setTiredness] = useState(4);
-  const [stress, setStress] = useState(4);
+  const [step, setStep] = useState(0);
+  const [answers, setAnswers] = useState<Record<Key, number | null>>({ pain: null, fatigue: null, stress: null });
   const [comments, setComments] = useState("");
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  // Si la sesión ya se creó y falló la encuesta, reintentamos solo la encuesta.
+  const [sessionId, setSessionId] = useState<string | null>(null);
 
-  const [fontsLoaded] = useFonts({
-    PromptRegular: require("../../assets/fonts/Prompt-Regular.ttf"),
-    PromptBold: require("../../assets/fonts/Prompt-SemiBold.ttf"),
-  });
+  const isLast = step === QUESTIONS.length; // paso final = comentarios
+  const current = QUESTIONS[step];
+
+  const handleNext = () => {
+    if (!isLast && answers[current.key] == null) return;
+    setStep((s) => s + 1);
+  };
 
   const handleSubmit = async () => {
-    if (!patientId || !routineId) {
-      console.error("Falta patientId o routineId para crear la sesion");
+    if (!routineId) {
+      setError("No se encontró la rutina. Vuelve al inicio e inténtalo de nuevo.");
       return;
     }
     setLoading(true);
+    setError(null);
     try {
-      // 1. Create session first
-      const session = await createSession(patientId, routineId);
-      
-      // 2. Submit pre survey
+      const sid = sessionId ?? (await createSession(routineId)).id;
+      setSessionId(sid);
       await submitPreSurvey({
-        session_id: session.id,
-        pain_level: effort,
-        fatigue_level: tiredness,
-        comments: comments || undefined,
+        session_id: sid,
+        pain_level: answers.pain ?? 3,
+        fatigue_level: answers.fatigue ?? 3,
+        stress_level: answers.stress ?? undefined,
+        comments: comments.trim() || undefined,
       });
-
-      // 3. Navigate to instructions with the sessionId + los ids reales de los
-      //    session_exercises (ordenados por order_index). Viajan como CSV por la
-      //    cadena instruction → active-exercise, que resuelve seIds[index].
-      const seIds = session.session_exercises.map((se) => se.id).join(",");
-      router.push(`/instruction?sessionId=${session.id}&index=0&seIds=${seIds}`);
+      router.replace({ pathname: routes.instruction, params: { sessionId: sid, index: "0" } });
     } catch (e) {
-      console.error(e);
-      // Fallback navigation even if it fails (optional)
-      router.push(`/instruction?index=0`);
+      setError(getErrorMessage(e, "No pudimos guardar tus respuestas. Inténtalo de nuevo."));
     } finally {
       setLoading(false);
     }
   };
 
-  if (!fontsLoaded) return null;
-
   return (
-    <KeyboardAvoidingView
-      style={{ flex: 1 }}
-      behavior={Platform.OS === "ios" ? "padding" : "height"}
-    >
-      <LinearGradient colors={["#DEEDE6", "#90C0C1"]} style={{ flex: 1 }}>
-        <ScrollView style={{ flex: 1 }} contentContainerStyle={styles.container}>
-          <TouchableOpacity style={styles.backBtn} onPress={() => router.back()}>
-            <MaterialCommunityIcons name="arrow-left" size={32} color="#27695A" />
-          </TouchableOpacity>
-
-          <View style={styles.title}>
-            <Image
-              style={styles.logo}
-              source={require("../../assets/images/logoActivaMente.png")}
-              resizeMode="contain"
-            />
-            <Text style={styles.name}>¿Cómo te sientes?</Text>
-            <Text style={styles.subtitle}>
-              Antes de empezar, cuentanos como estas hoy
-            </Text>
-          </View>
-
-          <View style={styles.slider}>
-            <SurveySlider label="Nivel de esfuerzo" value={effort} onChange={setEffort} />
-            <SurveySlider label="Nivel de cansancio" value={tiredness} onChange={setTiredness} />
-            <SurveySlider label="Nivel de estrés" value={stress} onChange={setStress} />
-
-            <View style={{ marginTop: 24 }}>
-              <Text style={styles.label}>Otros (opcional)</Text>
+    <Screen>
+      <Banner title="¿Cómo te sientes?" subtitle={`Pregunta ${Math.min(step + 1, QUESTIONS.length + 1)} de ${QUESTIONS.length + 1}`} big showBack onBack={() => (step > 0 ? setStep((s) => s - 1) : router.back())} />
+      <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === "ios" ? "padding" : undefined}>
+        <ScrollView contentContainerStyle={styles.scroll} keyboardShouldPersistTaps="handled">
+          {!isLast ? (
+            <>
+              <Text style={styles.question}>{current.title}</Text>
+              <ScaleOptions options={current.options} value={answers[current.key]} onChange={(v) => setAnswers((a) => ({ ...a, [current.key]: v }))} />
+              <Button title="Siguiente" size="patient" icon="arrow-right" onPress={handleNext} disabled={answers[current.key] == null} style={styles.cta} testID="survey-next" />
+            </>
+          ) : (
+            <>
+              <Text style={styles.question}>¿Quieres contarnos algo más?</Text>
+              <Text style={styles.hint}>Es opcional. Puedes dejarlo en blanco.</Text>
               <TextInput
                 style={styles.input}
                 placeholder="Escribe aquí cómo te sientes..."
-                placeholderTextColor="rgba(39, 105, 90, 0.5)"
+                placeholderTextColor={Colors.textMuted}
                 multiline
                 value={comments}
                 onChangeText={setComments}
+                accessibilityLabel="Comentarios opcionales"
               />
-            </View>
-          </View>
-          <TouchableOpacity 
-            style={[styles.button, loading && { opacity: 0.7 }]} 
-            onPress={handleSubmit}
-            disabled={loading}
-          >
-            {loading ? (
-              <ActivityIndicator color="#DEEDE6" size="large" />
-            ) : (
-              <Text style={styles.buttonText}>Continuar</Text>
-            )}
-          </TouchableOpacity>
+              <InlineError message={error} />
+              <Button title={error ? "Reintentar" : "Comenzar"} size="patient" icon="play" onPress={handleSubmit} loading={loading} style={styles.cta} testID="survey-submit" />
+              <View style={{ height: 24 }} />
+            </>
+          )}
         </ScrollView>
-      </LinearGradient>
-    </KeyboardAvoidingView>
+      </KeyboardAvoidingView>
+    </Screen>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flexGrow: 1,
-    paddingBottom: 40,
-  },
-  title: {
-    alignItems: "center",
-    justifyContent: "center",
-    backgroundColor: "transparent",
-    paddingHorizontal: 20,
-  },
-  name: {
-    fontSize: 30,
-    fontFamily: "PromptBold",
-    color: "#27695A",
-    marginTop: 12,
-    textAlign: 'center',
-  },
-  subtitle: {
-    fontSize: 18,
-    fontFamily: 'PromptRegular',
-    color: '#27695A',
-    textAlign: 'center',
-    marginTop: 8,
-    lineHeight: 26,
-  },
-  slider: {
-    flex: 1,
-    padding: 20,
-    backgroundColor: "transparent",
-  },
-  logo: {
-    width: 120,
-    height: 120,
-    marginTop: 40,
-    borderRadius: 100,
-  },
-  label: {
-    fontSize: 22,
-    fontFamily: "PromptBold",
-    color: "#27695A",
-    marginBottom: 10,
-  },
+  scroll: { padding: 20, paddingBottom: 40 },
+  question: { fontSize: FontSize.patient.title, fontFamily: Fonts.bold, color: Colors.textPrimary, textAlign: "center", marginBottom: 20, lineHeight: 36 },
+  hint: { fontSize: FontSize.patient.body, fontFamily: Fonts.regular, color: Colors.textSecondary, textAlign: "center", marginBottom: 14 },
   input: {
-    borderWidth: 1,
-    borderColor: "#49A2A5",
-    borderRadius: 14,
-    backgroundColor: "#EAF4F0",
-    minHeight: 120,
-    paddingHorizontal: 16,
-    paddingVertical: 14,
-    textAlign: "left",
+    borderWidth: 1.5,
+    borderColor: Colors.border,
+    borderRadius: 16,
+    backgroundColor: Colors.cardBgAlt,
+    minHeight: 140,
+    padding: 16,
     textAlignVertical: "top",
-    fontFamily: "PromptRegular",
-    fontSize: 18,
-    color: "#27695A",
+    fontFamily: Fonts.regular,
+    fontSize: FontSize.patient.body,
+    color: Colors.textPrimary,
   },
-  button: {
-    backgroundColor: "#7BB899",
-    alignItems: "center",
-    justifyContent: "center",
-    paddingVertical: 20,
-    borderRadius: 20,
-    marginHorizontal: 25,
-    marginBottom: 20,
-    alignSelf: "stretch",
-  },
-  buttonText: {
-    color: "#DEEDE6",
-    fontFamily: "PromptBold",
-    fontSize: 28,
-  },
-  backBtn: {
-    marginTop: 50,
-    marginLeft: 16,
-    alignSelf: "flex-start",
-    padding: 8,
-  },
+  cta: { marginTop: 24 },
 });

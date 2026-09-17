@@ -6,6 +6,8 @@ from app.database import Base
 
 
 class SpecialistPatient(Base):
+    """Asignación N:M especialista ↔ paciente. Ambos ids son users.id."""
+
     __tablename__ = "specialist_patient"
 
     specialist_id = Column(UUID(as_uuid=True), ForeignKey("specialists.user_id", ondelete="CASCADE"), primary_key=True)

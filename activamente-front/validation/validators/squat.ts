@@ -1,143 +1,99 @@
-import {
-  ExerciseValidator,
-  Landmark,
-  ValidatorFn,
-  ValidatorPhase,
-  ValidatorResult,
-  ValidatorState,
-} from '../types';
-import { calcularAngulo, distanciaY } from '../geometry';
-import {
-  LEFT_SHOULDER, RIGHT_SHOULDER,
-  LEFT_HIP, RIGHT_HIP,
-  LEFT_KNEE, RIGHT_KNEE,
-  LEFT_ANKLE, RIGHT_ANKLE,
-  MIN_VISIBILITY,
-} from '../landmarkIndices';
+/**
+ * Validador: Sentadilla.
+ *
+ * Métrica: ángulo de rodilla cadera→rodilla→tobillo del lado visible (o el
+ * promedio si se ven ambos). De pie ~170°+. Histéresis 160/152.
+ *
+ * Niveles (profundidad): 1 → ≤110° (media) · 2 → ≤90° (paralela) · 3 → ≤75° (profunda).
+ */
 
-// 1. Puntos clave necesarios para la sentadilla
+import { ExerciseValidator, Landmark, ValidatorPhase } from "../types";
+import { calcularAngulo, distanciaY, promedio } from "../geometry";
+import {
+  LEFT_ANKLE,
+  LEFT_HIP,
+  LEFT_KNEE,
+  LEFT_SHOULDER,
+  MIN_VISIBILITY,
+  RIGHT_ANKLE,
+  RIGHT_HIP,
+  RIGHT_KNEE,
+  RIGHT_SHOULDER,
+} from "../landmarkIndices";
+import { createPhaseMachine, createStabilizedValidator } from "../stabilize";
+
 const LEFT_INDICES = [LEFT_SHOULDER, LEFT_HIP, LEFT_KNEE, LEFT_ANKLE];
 const RIGHT_INDICES = [RIGHT_SHOULDER, RIGHT_HIP, RIGHT_KNEE, RIGHT_ANKLE];
 
-// 2. Umbrales (en grados)
-const STANDING_KNEE_ANGLE = 160;
-const SQUAT_LEVEL_1_ANGLE = 110; // Media sentadilla
-const SQUAT_LEVEL_2_ANGLE = 90;  // Sentadilla profunda o paralela
-const MIN_HIP_ANGLE = 60;        // Umbral para evitar que se inclinen demasiado hacia adelante
+const STANDING_ENTER_KNEE_ANGLE = 160;
+const STANDING_EXIT_KNEE_ANGLE = 152;
+const MIN_HIP_ANGLE = 60; // tronco demasiado inclinado
 const BACK_ALIGN_TOLERANCE = 0.05;
+const SMOOTH_WINDOW = 3;
+const PHASE_CONFIRM_FRAMES = 2;
 
-type LevelTarget = {
-  reached: (kneeAngle: number) => boolean;
-  successMsg: string;
-};
+const LEVEL_KNEE_ANGLE: Record<number, number> = { 1: 110, 2: 90, 3: 75 };
 
-// 3. Objetivos por nivel
-const LEVEL_TARGETS: Record<number, LevelTarget> = {
-  1: {
-    reached: (kneeAngle) => kneeAngle <= SQUAT_LEVEL_1_ANGLE,
-    successMsg: '¡Buena profundidad (Nivel 1)!',
-  },
-  2: {
-    reached: (kneeAngle) => kneeAngle <= SQUAT_LEVEL_2_ANGLE,
-    successMsg: '¡Excelente bajada (Nivel 2)!',
-  },
-};
+type Side = "left" | "right" | "both" | "none";
 
-// Detectar qué lado del cuerpo está visible
-function getVisibleSide(lms: Landmark[]): 'left' | 'right' | 'both' | 'none' {
-  const leftVisible = LEFT_INDICES.every(idx => lms[idx] && lms[idx].visibility >= MIN_VISIBILITY);
-  const rightVisible = RIGHT_INDICES.every(idx => lms[idx] && lms[idx].visibility >= MIN_VISIBILITY);
-
-  if (leftVisible && rightVisible) return 'both';
-  if (leftVisible) return 'left';
-  if (rightVisible) return 'right';
-  return 'none';
+function visibleSide(lms: Landmark[]): Side {
+  const l = LEFT_INDICES.every((i) => lms[i] && lms[i].visibility >= MIN_VISIBILITY);
+  const r = RIGHT_INDICES.every((i) => lms[i] && lms[i].visibility >= MIN_VISIBILITY);
+  if (l && r) return "both";
+  if (l) return "left";
+  if (r) return "right";
+  return "none";
 }
 
-// 4. Máquina de estados basada en el ángulo de la rodilla
-function nextPhase(
-  prev: ValidatorPhase,
-  kneeAngle: number,
-  levelReached: boolean,
-): ValidatorPhase {
-  if (kneeAngle > STANDING_KNEE_ANGLE) return 'standing';
-  if (levelReached) return 'hold';
-  if (prev === 'hold' || prev === 'ascending') return 'ascending';
-  return 'descending';
+function sided(lms: Landmark[], fn: (s: number, h: number, k: number, a: number) => number): number {
+  const side = visibleSide(lms);
+  const left = fn(LEFT_SHOULDER, LEFT_HIP, LEFT_KNEE, LEFT_ANKLE);
+  const right = fn(RIGHT_SHOULDER, RIGHT_HIP, RIGHT_KNEE, RIGHT_ANKLE);
+  if (side === "right") return right;
+  if (side === "both") return promedio(left, right);
+  return left;
 }
 
-function buildValidator(level: number): ValidatorFn {
-  const target = LEVEL_TARGETS[level] ?? LEVEL_TARGETS[1];
+const kneeAngle = (lms: Landmark[]) => sided(lms, (_s, h, k, a) => calcularAngulo(lms[h], lms[k], lms[a]));
+const hipAngle = (lms: Landmark[]) => sided(lms, (s, h, k) => calcularAngulo(lms[s], lms[h], lms[k]));
 
-  return (lms: Landmark[], state: ValidatorState): ValidatorResult => {
-    // A. Chequear visibilidad
-    const side = getVisibleSide(lms);
-    if (lms.length === 0 || side === 'none') {
-      return {
-        ok: false,
-        feedback: 'Hazte visible de perfil desde los hombros hasta los tobillos',
-        repCompleted: false,
-        phase: state.phase,
-      };
-    }
+const machine = createPhaseMachine({
+  standingEnter: STANDING_ENTER_KNEE_ANGLE,
+  standingExit: STANDING_EXIT_KNEE_ANGLE,
+  standingIs: "high",
+});
 
-    // B. Calcular métrica principal (Ángulo de las rodillas del lado visible)
-    const kneeAngleL = calcularAngulo(lms[LEFT_HIP], lms[LEFT_KNEE], lms[LEFT_ANKLE]);
-    const kneeAngleR = calcularAngulo(lms[RIGHT_HIP], lms[RIGHT_KNEE], lms[RIGHT_ANKLE]);
-    
-    let activeKneeAngle = kneeAngleL; // Default
-    if (side === 'right') activeKneeAngle = kneeAngleR;
-    else if (side === 'both') activeKneeAngle = (kneeAngleL + kneeAngleR) / 2;
+const PHASE_FEEDBACK: Record<ValidatorPhase, string> = {
+  standing: "Baja flexionando las rodillas",
+  descending: "¡Bien! Sigue bajando",
+  hold: "¡Buena profundidad!",
+  ascending: "Sube despacio",
+};
 
-    const levelReached = target.reached(activeKneeAngle);
-    const phase = nextPhase(state.phase, activeKneeAngle, levelReached);
-
-    const formError = (feedback: string): ValidatorResult => {
-      state.prevAngle = activeKneeAngle;
-      state.phase = phase;
-      return { ok: false, feedback, repCompleted: false, phase };
-    };
-
-    // C. Reglas de forma
-    // Regla 1: Hombros alineados (Solo aplicable si está de frente)
-    if (side === 'both' && distanciaY(lms[LEFT_SHOULDER], lms[RIGHT_SHOULDER]) > BACK_ALIGN_TOLERANCE) {
-      return formError('Mantén los hombros alineados');
-    }
-
-    // Regla 2: Inclinación del tronco (Ángulo de la cadera)
-    const hipAngleL = calcularAngulo(lms[LEFT_SHOULDER], lms[LEFT_HIP], lms[LEFT_KNEE]);
-    const hipAngleR = calcularAngulo(lms[RIGHT_SHOULDER], lms[RIGHT_HIP], lms[RIGHT_KNEE]);
-    
-    let activeHipAngle = hipAngleL;
-    if (side === 'right') activeHipAngle = hipAngleR;
-    else if (side === 'both') activeHipAngle = (hipAngleL + hipAngleR) / 2;
-
-    if (activeHipAngle < MIN_HIP_ANGLE) {
-      return formError('Mantén la espalda más recta al bajar');
-    }
-
-    // D. Detección de repetición completada
-    const repCompleted =
-      phase === 'standing' &&
-      (state.phase === 'hold' || state.phase === 'ascending');
-
-    // E. Actualizar estado
-    state.prevAngle = activeKneeAngle;
-    state.phase = phase;
-    if (repCompleted) state.repCount += 1;
-
-    // F. Retornar resultado
-    if (levelReached) {
-      return { ok: true, feedback: target.successMsg, repCompleted, phase };
-    }
-    return { ok: true, feedback: null, repCompleted, phase };
-  };
+function buildValidator(level: number) {
+  const target = LEVEL_KNEE_ANGLE[level] ?? LEVEL_KNEE_ANGLE[1];
+  return createStabilizedValidator({
+    visibility: (lms) => (visibleSide(lms) === "none" ? "Ponte de perfil, que se vea de los hombros a los tobillos" : null),
+    metric: kneeAngle,
+    levelReached: (_lms, knee) => knee <= target,
+    machine,
+    smoothWindow: SMOOTH_WINDOW,
+    confirmFrames: PHASE_CONFIRM_FRAMES,
+    formRules: (lms) => {
+      if (visibleSide(lms) === "both" && distanciaY(lms[LEFT_SHOULDER], lms[RIGHT_SHOULDER]) > BACK_ALIGN_TOLERANCE) {
+        return "Mantén los hombros alineados";
+      }
+      if (hipAngle(lms) < MIN_HIP_ANGLE) return "Mantén la espalda más recta al bajar";
+      return null;
+    },
+    phaseFeedback: PHASE_FEEDBACK,
+    metricName: "kneeAngle",
+    extraMetrics: (lms) => ({ hipAngle: hipAngle(lms) }),
+  });
 }
 
 export const squatValidator: ExerciseValidator = {
-  id: 'squat', // Este ID debe coincidir con el del backend
-  levels: {
-    1: buildValidator(1),
-    2: buildValidator(2),
-  },
+  id: "squat",
+  maxLevel: 3,
+  levels: { 1: buildValidator(1), 2: buildValidator(2), 3: buildValidator(3) },
 };

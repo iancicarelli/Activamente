@@ -1,6 +1,6 @@
 from datetime import datetime
-from pydantic import BaseModel
 
+from pydantic import BaseModel
 
 # ─── Perfil propio del administrador (GET/PATCH /api/admins/me) ─────────────────
 

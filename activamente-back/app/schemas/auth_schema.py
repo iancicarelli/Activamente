@@ -1,13 +1,22 @@
 from uuid import UUID
-from pydantic import BaseModel, EmailStr, Field
+
+from pydantic import BaseModel, EmailStr, Field, model_validator
+
 from app.models.user_model import UserRole
-from typing import Optional
-from app.schemas.patient_schema import PatientResponse
 
 
 class LoginRequest(BaseModel):
-    email: EmailStr
-    password: str
+    """Login por email o por RUT (R-05). Exactamente uno de los dos."""
+
+    email: EmailStr | None = None
+    rut: str | None = None
+    password: str = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def _one_identifier(self):
+        if not self.email and not self.rut:
+            raise ValueError("Ingresa tu email o tu RUT.")
+        return self
 
 
 class ChangePasswordRequest(BaseModel):
@@ -20,4 +29,4 @@ class TokenResponse(BaseModel):
     token_type: str = "bearer"
     role: UserRole
     user_id: UUID
-    patient: Optional[PatientResponse] = None
+    expires_in: int  # segundos

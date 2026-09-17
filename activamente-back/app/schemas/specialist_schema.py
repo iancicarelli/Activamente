@@ -39,7 +39,6 @@ class SpecialistMeResponse(BaseModel):
 
 
 class SpecialistMeUpdate(BaseModel):
-    # Todos opcionales: se aplican solo los campos presentes (PATCH parcial).
     first_name: str | None = None
     last_name: str | None = None
     specialty: str | None = None

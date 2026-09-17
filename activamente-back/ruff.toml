@@ -1,0 +1,9 @@
+line-length = 130
+target-version = "py312"
+
+[lint]
+select = ["E", "F", "I", "B", "UP"]
+ignore = ["E501", "B008"]  # B008: Depends() en defaults es el patrón de FastAPI
+
+[lint.per-file-ignores]
+"tests/conftest.py" = ["E402"]

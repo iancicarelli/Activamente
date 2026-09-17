@@ -1,65 +1,120 @@
 // services/patientService.ts
-//
-// Cliente de los endpoints de pacientes del backend (todos protegidos con auth):
-//   GET   /api/patients/                  → lista de pacientes
-//   GET   /api/patients/by-rut/{rut}      → ficha de un paciente por RUT
-//   GET   /api/patients/{id}              → ficha básica por id
-//   POST  /api/patients/assign            → asigna un paciente al especialista
-//   PATCH /api/patients/{id}/status       → habilita/deshabilita un paciente
-//
-// Sigue el patrón de los demás services: usa apiFetch (auth: true por defecto),
-// que adjunta el Bearer token desde authStore. El especialista se obtiene del
-// token en el backend, por eso no se envía en ninguna petición.
-
+//   GET    /api/patients/?search&limit&offset   (especialista: solo asignados)
+//   GET    /api/patients/me/sessions
+//   GET    /api/patients/by-rut/{rut}
+//   GET    /api/patients/{id}
+//   POST   /api/patients/assign
+//   DELETE /api/patients/{id}/assign
+//   PATCH  /api/patients/{id}/status           (cuenta: users.is_active)
 import { apiFetch } from "./apiClient";
 
-// ─── Interfaces ───────────────────────────────────────────────────────────────
+export interface SurveySummary {
+  pain_level: number | null;
+  fatigue_level: number | null;
+  stress_level: number | null;
+  mood_level: number | null;
+  comments: string | null;
+}
 
-export interface Session {
+export interface SessionItem {
   id: string;
   name: string;
-  duration: string;
-  date: string;
+  date: string;               // ISO 8601 con zona
+  completedAt: string | null;
+  durationMinutes: number | null;
   completed: boolean;
+  exercisesTotal: number;
+  exercisesDone: number;
+  preSurvey: SurveySummary | null;
+  postSurvey: SurveySummary | null;
 }
+
+// Encuestas de la última sesión con encuesta y las métricas "en rojo" (alerta).
+export interface WellbeingStatus {
+  sessionId: string;
+  date: string;               // ISO 8601 con zona
+  hasAlert: boolean;
+  reasons: string[];
+  preSurvey: SurveySummary | null;
+  postSurvey: SurveySummary | null;
+}
+
+export type AlertKind = "wellbeing" | "inactive";
 
 export interface ComplianceMetrics {
   sessionsCompleted: number;
   sessionsTotal: number;
   adherencePercent: number;
+  sessionsCompletedThisWeek: number;
+  currentStreakDays: number;
 }
 
 export interface Patient {
   id: string;
   fullName: string;
   rut: string;
-  age: number;
+  age: number | null;
   gender: string;
   email: string;
   phone: string;
   address: string;
-  metrics: ComplianceMetrics;
-  sessions: Session[];
   active: boolean;
+  assignedToMe: boolean | null;
+  metrics: ComplianceMetrics | null;
+  sessions: SessionItem[];
+  wellbeing: WellbeingStatus | null;
 }
 
 export interface PatientListItem {
   id: string;
   fullName: string;
+  rut: string | null;
+  age: number | null;
+  isActive: boolean;
   hasAlert: boolean;
-  alertMessage?: string;
+  alertMessage: string | null;
+  alertKind: AlertKind | null;
+  isNew: boolean;
+  lastSessionDate: string | null;
 }
 
-// ─── Formas crudas del backend ─────────────────────────────────────────────────
+// ─── Formas crudas ────────────────────────────────────────────────────────────
+
+interface RawSessionItem {
+  id: string;
+  name: string;
+  date: string;
+  completed_at: string | null;
+  duration_minutes: number | null;
+  completed: boolean;
+  exercises_total: number;
+  exercises_done: number;
+  pre_survey: SurveySummary | null;
+  post_survey: SurveySummary | null;
+}
 
 interface RawPatientListItem {
   id: string;
   first_name: string | null;
   last_name: string | null;
   email: string;
-  created_at: string | null;
+  rut: string | null;
+  age: number | null;
+  is_active: boolean;
   hasAlert: boolean;
-  alertMessage?: string;
+  alertMessage: string | null;
+  alertKind?: AlertKind | null;
+  isNew: boolean;
+  lastSessionDate: string | null;
+}
+
+interface RawWellbeingStatus {
+  session_id: string;
+  date: string;
+  has_alert: boolean;
+  reasons: string[];
+  pre_survey: SurveySummary | null;
+  post_survey: SurveySummary | null;
 }
 
 interface RawPatientResponse {
@@ -72,98 +127,104 @@ interface RawPatientResponse {
   gender?: string | null;
   phone?: string | null;
   address?: string | null;
-  metrics?: ComplianceMetrics;
-  sessions?: Session[];
+  assignedToMe?: boolean | null;
+  metrics?: ComplianceMetrics | null;
+  sessions?: RawSessionItem[] | null;
+  wellbeing?: RawWellbeingStatus | null;
 }
 
-// Métricas/sesiones aún no existen en el backend → valores por defecto seguros
-// para que las pantallas rendericen sin romperse.
-const EMPTY_METRICS: ComplianceMetrics = {
-  sessionsCompleted: 0,
-  sessionsTotal: 0,
-  adherencePercent: 0,
-};
+export const toSessionItem = (raw: RawSessionItem): SessionItem => ({
+  id: raw.id,
+  name: raw.name,
+  date: raw.date,
+  completedAt: raw.completed_at,
+  durationMinutes: raw.duration_minutes,
+  completed: raw.completed,
+  exercisesTotal: raw.exercises_total,
+  exercisesDone: raw.exercises_done,
+  preSurvey: raw.pre_survey,
+  postSurvey: raw.post_survey,
+});
 
-const fullNameFrom = (first: string | null, last: string | null): string =>
-  `${first ?? ""} ${last ?? ""}`.trim();
+export const toWellbeingStatus = (raw: RawWellbeingStatus): WellbeingStatus => ({
+  sessionId: raw.session_id,
+  date: raw.date,
+  hasAlert: raw.has_alert,
+  reasons: raw.reasons ?? [],
+  preSurvey: raw.pre_survey,
+  postSurvey: raw.post_survey,
+});
 
-const toPatient = (raw: RawPatientResponse): Patient => ({
+export const toPatient = (raw: RawPatientResponse): Patient => ({
   id: raw.id,
   fullName: raw.fullName,
   rut: raw.rut ?? "",
-  age: raw.age ?? 0,
+  age: raw.age ?? null,
   gender: raw.gender ?? "",
   email: raw.email,
   phone: raw.phone ?? "",
   address: raw.address ?? "",
-  metrics: raw.metrics ?? EMPTY_METRICS,
-  sessions: raw.sessions ?? [],
   active: raw.active,
+  assignedToMe: raw.assignedToMe ?? null,
+  metrics: raw.metrics ?? null,
+  sessions: (raw.sessions ?? []).map(toSessionItem),
+  wellbeing: raw.wellbeing ? toWellbeingStatus(raw.wellbeing) : null,
+});
+
+export const toPatientListItem = (p: RawPatientListItem): PatientListItem => ({
+  id: p.id,
+  fullName: `${p.first_name ?? ""} ${p.last_name ?? ""}`.trim(),
+  rut: p.rut,
+  age: p.age,
+  isActive: p.is_active,
+  hasAlert: p.hasAlert,
+  alertMessage: p.alertMessage,
+  alertKind: p.alertKind ?? null,
+  isNew: p.isNew,
+  lastSessionDate: p.lastSessionDate,
 });
 
 // ─── Funciones ────────────────────────────────────────────────────────────────
 
-// GET /api/patients/ → lista de pacientes del sistema.
-// Paginación opcional (el backend usa limit=50 / offset=0 por defecto).
-export const getPatients = async (
-  params: { limit?: number; offset?: number } = {}
-): Promise<PatientListItem[]> => {
+export interface ListPatientsParams {
+  search?: string;
+  limit?: number;
+  offset?: number;
+}
+
+export const getPatients = async (params: ListPatientsParams = {}): Promise<PatientListItem[]> => {
+  const query = new URLSearchParams();
+  if (params.search?.trim()) query.set("search", params.search.trim());
+  if (params.limit != null) query.set("limit", String(params.limit));
+  if (params.offset != null) query.set("offset", String(params.offset));
+  const qs = query.toString();
+  const raw = await apiFetch<RawPatientListItem[]>(`/api/patients/${qs ? `?${qs}` : ""}`);
+  return raw.map(toPatientListItem);
+};
+
+export const getMySessions = async (params: { limit?: number; offset?: number } = {}): Promise<SessionItem[]> => {
   const query = new URLSearchParams();
   if (params.limit != null) query.set("limit", String(params.limit));
   if (params.offset != null) query.set("offset", String(params.offset));
   const qs = query.toString();
-
-  const raw = await apiFetch<RawPatientListItem[]>(
-    `/api/patients/${qs ? `?${qs}` : ""}`,
-    {
-      method: "GET",
-      auth: true,
-    }
-  );
-  return raw.map((p) => ({
-    id: p.id,
-    fullName: fullNameFrom(p.first_name, p.last_name),
-    hasAlert: p.hasAlert,
-    alertMessage: p.alertMessage,
-  }));
+  const raw = await apiFetch<RawSessionItem[]>(`/api/patients/me/sessions${qs ? `?${qs}` : ""}`);
+  return raw.map(toSessionItem);
 };
 
-// GET /api/patients/by-rut/{rut} → ficha completa por RUT.
-export const getPatientByRut = async (rut: string): Promise<Patient> => {
-  const raw = await apiFetch<RawPatientResponse>(
-    `/api/patients/by-rut/${encodeURIComponent(rut)}`,
-    { method: "GET", auth: true }
-  );
-  return toPatient(raw);
-};
+export const getPatientByRut = (rut: string): Promise<Patient> =>
+  apiFetch<RawPatientResponse>(`/api/patients/by-rut/${encodeURIComponent(rut)}`).then(toPatient);
 
-// GET /api/patients/{id} → ficha básica por id (identidad + contacto mínimo).
-export const getPatientById = async (id: string): Promise<Patient> => {
-  const raw = await apiFetch<RawPatientResponse>(
-    `/api/patients/${encodeURIComponent(id)}`,
-    { method: "GET", auth: true }
-  );
-  return toPatient(raw);
-};
+export const getPatientById = (id: string): Promise<Patient> =>
+  apiFetch<RawPatientResponse>(`/api/patients/${encodeURIComponent(id)}`).then(toPatient);
 
-// PATCH /api/patients/{id}/status → habilita/deshabilita al paciente.
-export const togglePatientStatus = async (
-  id: string,
-  active: boolean
-): Promise<Patient> => {
-  const raw = await apiFetch<RawPatientResponse>(
-    `/api/patients/${encodeURIComponent(id)}/status`,
-    { method: "PATCH", auth: true, body: { active } }
-  );
-  return toPatient(raw);
-};
+export const setPatientAccountStatus = (id: string, active: boolean): Promise<Patient> =>
+  apiFetch<RawPatientResponse>(`/api/patients/${encodeURIComponent(id)}/status`, {
+    method: "PATCH",
+    body: { active },
+  }).then(toPatient);
 
-// POST /api/patients/assign → vincula un paciente (por RUT) al especialista
-// autenticado.
-export const assignPatientToSpecialist = async (rut: string): Promise<void> => {
-  await apiFetch<{ message: string }>("/api/patients/assign", {
-    method: "POST",
-    auth: true,
-    body: { rut },
-  });
-};
+export const assignPatientToSpecialist = (rut: string): Promise<{ message: string; patient_id: string }> =>
+  apiFetch<{ message: string; patient_id: string }>("/api/patients/assign", { method: "POST", body: { rut } });
+
+export const unassignPatient = (id: string): Promise<void> =>
+  apiFetch<void>(`/api/patients/${encodeURIComponent(id)}/assign`, { method: "DELETE" });

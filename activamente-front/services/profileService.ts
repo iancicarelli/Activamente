@@ -1,17 +1,6 @@
-// services/profileService.ts
-//
-// Cliente de los endpoints de "mi perfil" (perfil propio del usuario logueado):
-//   GET   /api/specialists/me     GET   /api/admins/me
-//   PATCH /api/specialists/me     PATCH /api/admins/me
-//   POST  /api/auth/change-password
-//
-// Sigue el patrón del resto de servicios: usa apiFetch (auth: true por defecto),
-// que adjunta el Bearer token desde authStore. El backend toma el user del token,
-// por eso no se envía ningún id en la URL.
-
+// services/profileService.ts — perfil propio (GET/PATCH /api/specialists/me,
+// /api/admins/me) y cambio de contraseña (POST /api/auth/change-password).
 import { apiFetch } from "./apiClient";
-
-// ─── Especialista ──────────────────────────────────────────────────────────────
 
 export interface SpecialistProfile {
   first_name: string | null;
@@ -30,15 +19,10 @@ export interface SpecialistProfileUpdate {
   phone?: string;
 }
 
-export const getSpecialistProfile = (): Promise<SpecialistProfile> =>
-  apiFetch<SpecialistProfile>("/api/specialists/me", { method: "GET" });
+export const getSpecialistProfile = (): Promise<SpecialistProfile> => apiFetch<SpecialistProfile>("/api/specialists/me");
 
-export const updateSpecialistProfile = (
-  body: SpecialistProfileUpdate
-): Promise<SpecialistProfile> =>
+export const updateSpecialistProfile = (body: SpecialistProfileUpdate): Promise<SpecialistProfile> =>
   apiFetch<SpecialistProfile>("/api/specialists/me", { method: "PATCH", body });
-
-// ─── Administrador ──────────────────────────────────────────────────────────────
 
 export interface AdminProfile {
   first_name: string | null;
@@ -57,21 +41,22 @@ export interface AdminProfileUpdate {
   phone?: string;
 }
 
-export const getAdminProfile = (): Promise<AdminProfile> =>
-  apiFetch<AdminProfile>("/api/admins/me", { method: "GET" });
+export const getAdminProfile = (): Promise<AdminProfile> => apiFetch<AdminProfile>("/api/admins/me");
 
-export const updateAdminProfile = (
-  body: AdminProfileUpdate
-): Promise<AdminProfile> =>
+export const updateAdminProfile = (body: AdminProfileUpdate): Promise<AdminProfile> =>
   apiFetch<AdminProfile>("/api/admins/me", { method: "PATCH", body });
-
-// ─── Cambio de contraseña (cualquier rol) ───────────────────────────────────────
 
 export interface ChangePasswordPayload {
   current_password: string;
   new_password: string;
 }
 
-// POST /api/auth/change-password → 204 No Content (sin body de respuesta).
 export const changePassword = (body: ChangePasswordPayload): Promise<void> =>
   apiFetch<void>("/api/auth/change-password", { method: "POST", body });
+
+// "Nombre Apellido Apellido" → {first_name, last_name}
+export const splitFullName = (fullName: string): { first_name: string; last_name: string } => {
+  const parts = fullName.trim().split(/\s+/).filter(Boolean);
+  const first_name = parts.shift() ?? "";
+  return { first_name, last_name: parts.join(" ") };
+};

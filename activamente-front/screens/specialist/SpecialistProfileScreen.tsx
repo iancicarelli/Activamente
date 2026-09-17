@@ -1,243 +1,124 @@
-import React, { useEffect, useState } from "react";
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, ActivityIndicator } from "react-native";
-import { LinearGradient } from "expo-linear-gradient";
+// screens/specialist/SpecialistProfileScreen.tsx — perfil propio: editar
+// nombre/especialidad/teléfono, cambiar contraseña y cerrar sesión.
+import React, { useCallback, useState } from "react";
+import { ScrollView, StyleSheet, Text, View } from "react-native";
 import { MaterialCommunityIcons } from "@expo/vector-icons";
-import { useFonts } from "expo-font";
-import { useRouter } from "expo-router";
-import SpecialistNavbar from "../../components/SpecialistNavbar";
-import { BannerStyle, Colors, Fonts, GradientColors } from "../../constants/theme";
-import { clearAuth } from "../../services/authStore";
-import { getSpecialistProfile, SpecialistProfile } from "../../services/profileService";
-
-// ─── Screen ───────────────────────────────────────────────────────────────────
-
-const PLACEHOLDER = "No establecido";
+import { useFocusEffect } from "expo-router";
+import { Screen, Banner, Card, Button, Field, InfoRow, FormModal, LoadingView, ErrorView, SectionTitle, confirm, useToast } from "../../components/ui";
+import { ChangePasswordModal } from "../../components/ChangePasswordModal";
+import { Colors, Fonts, FontSize } from "../../constants/theme";
+import { logout } from "../../services/authService";
+import { getSpecialistProfile, splitFullName, updateSpecialistProfile, SpecialistProfile } from "../../services/profileService";
+import { getErrorMessage } from "../../utils/errors";
 
 export default function SpecialistProfileScreen() {
-  const router = useRouter();
-
+  const toast = useToast();
   const [profile, setProfile] = useState<SpecialistProfile | null>(null);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [editVisible, setEditVisible] = useState(false);
+  const [passwordVisible, setPasswordVisible] = useState(false);
+  const [form, setForm] = useState({ name: "", specialty: "", phone: "" });
+  const [saving, setSaving] = useState(false);
 
-  const [fontsLoaded] = useFonts({
-    PromptRegular: require("../../assets/fonts/Prompt-Regular.ttf"),
-    PromptBold: require("../../assets/fonts/Prompt-SemiBold.ttf"),
-  });
-
-  useEffect(() => {
-    let mounted = true;
-    getSpecialistProfile()
-      .then((p) => mounted && setProfile(p))
-      .catch(() => mounted && setProfile(null))
-      .finally(() => mounted && setLoading(false));
-    return () => {
-      mounted = false;
-    };
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      setProfile(await getSpecialistProfile());
+    } catch (e) {
+      setError(getErrorMessage(e));
+    } finally {
+      setLoading(false);
+    }
   }, []);
 
-  if (!fontsLoaded) return null;
+  useFocusEffect(
+    useCallback(() => {
+      void load();
+    }, [load])
+  );
 
-  const handleLogout = () => {
-    clearAuth();
-    router.replace("/" as any);
+  const fullName = [profile?.first_name, profile?.last_name].filter(Boolean).join(" ").trim();
+
+  const openEdit = () => {
+    setForm({ name: fullName, specialty: profile?.specialty ?? "", phone: profile?.phone ?? "" });
+    setEditVisible(true);
   };
 
-  const fullName =
-    [profile?.first_name, profile?.last_name].filter(Boolean).join(" ").trim() || PLACEHOLDER;
+  const saveEdit = async () => {
+    if (!form.name.trim()) return;
+    setSaving(true);
+    try {
+      const updated = await updateSpecialistProfile({ ...splitFullName(form.name), specialty: form.specialty.trim(), phone: form.phone.trim() });
+      setProfile(updated);
+      setEditVisible(false);
+      toast("Perfil actualizado");
+    } catch (e) {
+      toast(getErrorMessage(e), "error");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleLogout = async () => {
+    if (await confirm("¿Cerrar sesión?", "Tendrás que ingresar de nuevo.", { confirmText: "Cerrar sesión", destructive: true })) logout();
+  };
 
   return (
-    <LinearGradient colors={GradientColors as any} style={styles.container}>
-      {/* ── Banner ── */}
-      <View style={styles.banner}>
-        <Text style={styles.bannerSubtitle}>Panel Profesional</Text>
-        <Text style={styles.bannerTitle}>Mi Perfil</Text>
-      </View>
-
+    <Screen>
+      <Banner overline="Panel profesional" title="Mi perfil" />
       {loading ? (
-        <View style={styles.loadingWrap}>
-          <ActivityIndicator size="large" color={Colors.btnTeal} />
-        </View>
+        <LoadingView />
+      ) : error || !profile ? (
+        <ErrorView message={error ?? "No pudimos cargar tu perfil."} onRetry={load} />
       ) : (
-        <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
-          {/* ── Profile card ── */}
-          <View style={styles.profileCard}>
-            <View style={styles.avatarWrap}>
-              <MaterialCommunityIcons name="account-circle-outline" size={72} color={Colors.textPrimary} />
+        <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
+          <Card style={styles.header}>
+            <MaterialCommunityIcons name="account-circle-outline" size={72} color={Colors.textPrimary} />
+            <Text style={styles.name}>{fullName || "Sin nombre"}</Text>
+            <View style={styles.pill}>
+              <MaterialCommunityIcons name="stethoscope" size={16} color={Colors.textOnDark} />
+              <Text style={styles.pillText}>{profile.specialty || "Especialista"}</Text>
             </View>
-            <Text style={styles.profileName}>{fullName}</Text>
-            <View style={styles.specialtyPill}>
-              <MaterialCommunityIcons name="stethoscope" size={14} color={Colors.textOnDark} />
-              <Text style={styles.specialtyText}>{profile?.specialty || "Especialista"}</Text>
-            </View>
-          </View>
+          </Card>
 
-          {/* ── Contact info ── */}
-          <Text style={styles.sectionTitle}>Información personal</Text>
-          <View style={styles.infoCard}>
-            <InfoRow icon="email-outline" label="Correo electrónico" value={profile?.email || PLACEHOLDER} />
-            <View style={styles.divider} />
-            <InfoRow icon="phone-outline" label="Teléfono" value={profile?.phone || PLACEHOLDER} />
-            <View style={styles.divider} />
-            <InfoRow icon="card-account-details-outline" label="RUT" value={profile?.rut || PLACEHOLDER} />
-          </View>
+          <SectionTitle>Información personal</SectionTitle>
+          <Card>
+            <InfoRow icon="email-outline" label="Correo" value={profile.email} />
+            <InfoRow icon="phone-outline" label="Teléfono" value={profile.phone || "No establecido"} />
+            <InfoRow icon="card-account-details-outline" label="RUT" value={profile.rut || "No establecido"} />
+          </Card>
 
-          {/* ── Logout ── */}
-          <TouchableOpacity style={styles.logoutBtn} onPress={handleLogout} activeOpacity={0.85}>
-            <MaterialCommunityIcons name="logout" size={20} color={Colors.textOnDark} />
-            <Text style={styles.logoutText}>Cerrar sesión</Text>
-          </TouchableOpacity>
+          <SectionTitle>Ajustes de cuenta</SectionTitle>
+          <Button title="Editar perfil" icon="pencil-outline" variant="outline" onPress={openEdit} style={styles.action} />
+          <Button title="Cambiar contraseña" icon="lock-outline" variant="outline" onPress={() => setPasswordVisible(true)} style={styles.action} />
+          <Button title="Cerrar sesión" icon="logout" variant="danger" onPress={handleLogout} style={styles.action} testID="logout" />
         </ScrollView>
       )}
 
-      <SpecialistNavbar active="profile" />
-    </LinearGradient>
+      <FormModal visible={editVisible} title="Editar perfil" onClose={() => setEditVisible(false)} onSubmit={saveEdit} submitting={saving} submitDisabled={!form.name.trim()}>
+        <Field label="Nombre completo" value={form.name} onChangeText={(t) => setForm((f) => ({ ...f, name: t }))} icon="account-outline" />
+        <Field label="Especialidad" value={form.specialty} onChangeText={(t) => setForm((f) => ({ ...f, specialty: t }))} icon="medal-outline" />
+        <Field label="Teléfono" value={form.phone} onChangeText={(t) => setForm((f) => ({ ...f, phone: t }))} icon="phone-outline" keyboardType="phone-pad" placeholder="+56 9 1234 5678" />
+      </FormModal>
+      <ChangePasswordModal
+        visible={passwordVisible}
+        onClose={() => setPasswordVisible(false)}
+        onSuccess={() => {
+          setPasswordVisible(false);
+          toast("Contraseña actualizada");
+        }}
+      />
+    </Screen>
   );
 }
-
-// ─── Sub-components ───────────────────────────────────────────────────────────
-
-function InfoRow({
-  icon,
-  label,
-  value,
-}: {
-  icon: React.ComponentProps<typeof MaterialCommunityIcons>["name"];
-  label: string;
-  value: string;
-}) {
-  return (
-    <View style={styles.infoRow}>
-      <View style={styles.infoIconBg}>
-        <MaterialCommunityIcons name={icon} size={20} color={Colors.btnTeal} />
-      </View>
-      <View style={{ flex: 1 }}>
-        <Text style={styles.infoLabel}>{label}</Text>
-        <Text style={styles.infoValue}>{value}</Text>
-      </View>
-    </View>
-  );
-}
-
-// ─── Styles ───────────────────────────────────────────────────────────────────
 
 const styles = StyleSheet.create({
-  container: { flex: 1 },
-  loadingWrap: { flex: 1, alignItems: "center", justifyContent: "center" },
-  scrollContent: { paddingHorizontal: 16, paddingTop: 16, paddingBottom: 32 },
-
-  // ── Banner ──
-  banner: { ...BannerStyle },
-  bannerSubtitle: {
-    fontSize: 14,
-    fontFamily: Fonts.regular,
-    color: Colors.bannerSubtitle,
-    marginBottom: 4,
-  },
-  bannerTitle: {
-    fontSize: 24,
-    fontFamily: Fonts.bold,
-    color: Colors.bannerTitle,
-  },
-
-  // ── Profile card ──
-  profileCard: {
-    backgroundColor: Colors.cardBg,
-    borderRadius: 16,
-    paddingVertical: 22,
-    paddingHorizontal: 16,
-    alignItems: "center",
-    marginBottom: 18,
-    borderWidth: 1,
-    borderColor: Colors.btnTeal,
-  },
-  avatarWrap: {
-    width: 96,
-    height: 96,
-    borderRadius: 48,
-    backgroundColor: Colors.cardBgAlt,
-    alignItems: "center",
-    justifyContent: "center",
-    marginBottom: 10,
-  },
-  profileName: {
-    fontSize: 20,
-    fontFamily: Fonts.bold,
-    color: Colors.textPrimary,
-  },
-  specialtyPill: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 6,
-    backgroundColor: Colors.btnTeal,
-    borderRadius: 14,
-    paddingHorizontal: 12,
-    paddingVertical: 5,
-    marginTop: 10,
-  },
-  specialtyText: {
-    fontSize: 12,
-    fontFamily: Fonts.bold,
-    color: Colors.textOnDark,
-  },
-
-  // ── Info ──
-  sectionTitle: {
-    fontSize: 16,
-    fontFamily: Fonts.bold,
-    color: Colors.textPrimary,
-    marginBottom: 10,
-    marginLeft: 4,
-  },
-  infoCard: {
-    backgroundColor: Colors.cardBg,
-    borderRadius: 16,
-    padding: 16,
-    marginBottom: 20,
-  },
-  infoRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    paddingVertical: 8,
-  },
-  infoIconBg: {
-    width: 38,
-    height: 38,
-    borderRadius: 12,
-    backgroundColor: Colors.cardBgAlt,
-    alignItems: "center",
-    justifyContent: "center",
-    marginRight: 12,
-  },
-  infoLabel: {
-    fontSize: 11,
-    fontFamily: Fonts.regular,
-    color: Colors.textSecondary,
-  },
-  infoValue: {
-    fontSize: 14,
-    fontFamily: Fonts.bold,
-    color: Colors.textPrimary,
-    marginTop: 2,
-  },
-  divider: {
-    height: 1,
-    backgroundColor: "rgba(39, 105, 90, 0.1)",
-    marginVertical: 4,
-  },
-
-  // ── Logout ──
-  logoutBtn: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: 8,
-    backgroundColor: Colors.btnDanger,
-    borderRadius: 12,
-    paddingVertical: 14,
-  },
-  logoutText: {
-    fontSize: 15,
-    fontFamily: Fonts.bold,
-    color: Colors.textOnDark,
-  },
+  scroll: { padding: 16, paddingBottom: 32 },
+  header: { alignItems: "center", paddingVertical: 22 },
+  name: { fontSize: FontSize.xl, fontFamily: Fonts.bold, color: Colors.textPrimary, marginTop: 8 },
+  pill: { flexDirection: "row", alignItems: "center", gap: 6, backgroundColor: Colors.btnTeal, borderRadius: 14, paddingHorizontal: 12, paddingVertical: 5, marginTop: 10 },
+  pillText: { fontSize: FontSize.sm, fontFamily: Fonts.bold, color: Colors.textOnDark },
+  action: { marginBottom: 10 },
 });

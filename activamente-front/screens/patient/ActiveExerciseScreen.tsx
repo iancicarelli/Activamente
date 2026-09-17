@@ -1,444 +1,484 @@
-import React, {
-  forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState,
-} from 'react';
-import {
-  View, Text, StyleSheet, TouchableOpacity,
-  ActivityIndicator, LayoutChangeEvent,
-} from 'react-native';
-import { LinearGradient } from 'expo-linear-gradient';
-import { useFonts } from 'expo-font';
-import { Ionicons } from '@expo/vector-icons';
-import { useRouter, useLocalSearchParams } from 'expo-router';
-import {
-  Camera,
-  useCameraDevice,
-  useCameraFormat,
-  useCameraPermission,
-  useFrameProcessor,
-  VisionCameraProxy,
-} from 'react-native-vision-camera';
-import { Worklets, useSharedValue } from 'react-native-worklets-core';
-import Svg, { Circle, Line } from 'react-native-svg';
-import { useExerciseValidator } from '../../validation/useExerciseValidator';
-import { EXERCISES } from '../../constants/exercises';
-import { Landmark } from '../../validation/types';
-import { MIN_VISIBILITY } from '../../validation/landmarkIndices';
-import { updateExerciseProgress } from '../../services/sessionService';
+// screens/patient/ActiveExerciseScreen.tsx — ejercicio activo con cámara.
+//
+// Usa la rutina REAL (HC-01/HC-02): nivel, series, reps y descanso vienen de
+// useSessionPlan; el flujo (countdown → activo → descanso → siguiente serie →
+// fin del ejercicio) lo lleva useExerciseSession (EX-10). Además:
+//   - cuenta regresiva 3-2-1 con guía de encuadre, contador enorme, voz
+//     (expo-speech) y vibración (expo-haptics) por rep (UX-12),
+//   - feedback estable ≥ 1.5 s (EX-33), pausa real (BT-01), descanso con
+//     "Saltar", salida con confirmación (BT-02), pantalla siempre encendida,
+//   - persistencia por serie y al salir con reintento (EX-11), accuracy y
+//     feedback por rep (EX-35 / EP-15),
+//   - HUD de rendimiento y grabador de fixtures solo en __DEV__ (EX-03 / EX-34).
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { LayoutChangeEvent, Share, StyleSheet, Text, TouchableOpacity, View } from "react-native";
+import { MaterialCommunityIcons } from "@expo/vector-icons";
+import { useLocalSearchParams, useRouter } from "expo-router";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { useKeepAwake } from "expo-keep-awake";
+import * as Speech from "expo-speech";
+import * as Haptics from "expo-haptics";
+import { Camera, useCameraDevice, useCameraFormat, useCameraPermission, useFrameProcessor, VisionCameraProxy } from "react-native-vision-camera";
+import { Worklets, useSharedValue } from "react-native-worklets-core";
+import { Screen, Banner, Button, LoadingView, ErrorView, confirm } from "../../components/ui";
+import { PoseSkeleton, PoseSkeletonHandle } from "../../components/PoseSkeleton";
+import { Colors, Fonts, FontSize } from "../../constants/theme";
+import { routes } from "../../router/routes";
+import { ExercisePlan, useExerciseSession, SessionState } from "../../hooks/useExerciseSession";
+import { buildExercisePlan, useSessionPlan } from "../../hooks/useSessionPlan";
+import { useStableFeedback } from "../../hooks/useStableFeedback";
+import { updateExerciseProgress } from "../../services/sessionService";
+import { useExerciseValidator } from "../../validation/useExerciseValidator";
+import { RepQualityTracker } from "../../validation/quality";
+import { Landmark } from "../../validation/types";
+import { BODY_INDICES } from "../../validation/landmarkIndices";
+import { allVisible } from "../../validation/stabilize";
 
-// ─── Constants ────────────────────────────────────────────────────────────────
+const FRAME_INTERVAL = 3; // procesa 1 de cada 3 frames
+const RETRY_DELAY_MS = 4000;
+const MAX_RECORD_FRAMES = 1200;
 
-// MediaPipe BlazePose skeleton: only body joints, skip face/feet noise
-const CONNECTIONS: [number, number][] = [
-  [11, 12],           // hombros
-  [11, 13], [13, 15], // brazo izquierdo
-  [12, 14], [14, 16], // brazo derecho
-  [11, 23], [12, 24], // tronco
-  [23, 24],           // caderas
-  [23, 25], [25, 27], // pierna izquierda
-  [24, 26], [26, 28], // pierna derecha
-];
+const posePlugin = VisionCameraProxy.initFrameProcessorPlugin("detectPose", { model: "lite" });
 
-// Solo dibujamos los landmarks que aportan al esqueleto/feedback: los que aparecen
-// en CONNECTIONS (juntas del cuerpo) más NOSE(0) para la referencia de cabeza.
-// Evita pintar cara (1-10), manos (17-22) y pies (29-32) que ningún validador usa.
-const DRAW_LANDMARK_INDICES: number[] = Array.from(new Set([0, ...CONNECTIONS.flat()]));
+const speak = (text: string) => {
+  try {
+    Speech.stop();
+    Speech.speak(text, { language: "es-CL", rate: 1.0 });
+  } catch {
+    // sin TTS disponible
+  }
+};
 
-const FRAME_INTERVAL = 4; // procesa 1 de cada 4 frames → ~7 fps a 30 fps cámara
+const buzz = (kind: "rep" | "series" | "done") => {
+  void Haptics.notificationAsync(
+    kind === "rep" ? Haptics.NotificationFeedbackType.Success : Haptics.NotificationFeedbackType.Warning
+  ).catch(() => {});
+};
 
-// Objetivo de reps por serie (hoy fijo, igual que el "/10" que muestra la UI).
-const REP_GOAL = 10;
+// ─── Wrapper: carga el plan y monta la pantalla real ─────────────────────────
 
-// Initialized once at module level — cheap, just a JS object
-const posePlugin = VisionCameraProxy.initFrameProcessorPlugin('detectPose', {});
-
-// ─── Skeleton overlay ─────────────────────────────────────────────────────────
-// Los landmarks viven en el estado INTERNO de este componente y se actualizan vía
-// ref (update()), no por props del root. Así, al llegar un frame solo re-renderiza
-// el esqueleto y nunca ActiveExerciseScreen. width/height siguen llegando por props
-// (cameraSize del root). React.memo evita re-render cuando width/height no cambian.
-export type PoseSkeletonHandle = { update: (lms: Landmark[]) => void };
-
-const PoseSkeleton = React.memo(
-  forwardRef<PoseSkeletonHandle, { width: number; height: number }>(
-    function PoseSkeleton({ width, height }, ref) {
-    const [landmarks, setLandmarks] = useState<Landmark[]>([]);
-
-    useImperativeHandle(ref, () => ({
-      update: (lms: Landmark[]) => setLandmarks(lms),
-    }), []);
-
-    if (landmarks.length === 0 || width === 0) return null;
-
-    // El bitmap ya llega rotado 270° desde Kotlin (portrait nativo), por lo que
-    // MediaPipe devuelve coordenadas en portrait y ya NO hay que intercambiar x↔y.
-    // Solo se aplica el espejo selfie en X de la cámara frontal.
-    const sx = (lm: Landmark) => (1 - lm.x) * width;        // espejo selfie en X
-    const sy = (lm: Landmark) => lm.y * height;             // y directo (portrait)
-
-    return (
-      <Svg style={StyleSheet.absoluteFill} width={width} height={height}>
-        {/* Líneas del esqueleto */}
-        {CONNECTIONS.map(([a, b]) => {
-          const lA = landmarks[a];
-          const lB = landmarks[b];
-          if (!lA || !lB || lA.visibility < MIN_VISIBILITY || lB.visibility < MIN_VISIBILITY) {
-            return null;
-          }
-          return (
-            <Line
-              key={`l-${a}-${b}`}
-              x1={sx(lA)} y1={sy(lA)}
-              x2={sx(lB)} y2={sy(lB)}
-              stroke="#00E5FF"
-              strokeWidth={2.5}
-              strokeLinecap="round"
-            />
-          );
-        })}
-
-        {/* Puntos de cada articulación (solo los índices relevantes) */}
-        {DRAW_LANDMARK_INDICES.map((i) => {
-          const lm = landmarks[i];
-          if (!lm || lm.visibility < MIN_VISIBILITY) return null;
-          return (
-            <Circle
-              key={`p-${i}`}
-              cx={sx(lm)}
-              cy={sy(lm)}
-              r={5}
-              fill="#76FF03"
-              stroke="#fff"
-              strokeWidth={1}
-            />
-          );
-        })}
-      </Svg>
-    );
-    },
-  ),
-);
-
-// ─── Main Screen ──────────────────────────────────────────────────────────────
-// La pantalla pide cámara, corre el frame processor con el validador del
-// ejercicio activo y muestra reps + feedback. El flujo completo de la rutina
-// (series, descanso, avance automático, pausa, salida) está planificado en
-// improvements.md (HC-01, HC-02, EX-10..12, BT-01, BT-02).
 export default function ActiveExerciseScreen() {
   const router = useRouter();
+  const { sessionId, index } = useLocalSearchParams<{ sessionId?: string; index?: string }>();
+  const idx = Number(index ?? 0);
+  const { plan, loading, error, reload } = useSessionPlan({ sessionId });
+  const exercise = plan ? buildExercisePlan(plan, idx) : null;
 
-  // sessionId y seIds vienen de PreviousSurveyScreen (POST /api/sessions) vía
-  // InstructionScreen. Sin sessionId el ejercicio corre pero no persiste.
-  const { index, sessionId, seIds } = useLocalSearchParams();
-  const exercise = EXERCISES[Number(index ?? 0)];
+  if (loading) {
+    return (
+      <Screen>
+        <Banner title="Preparando ejercicio" big />
+        <LoadingView label="Cargando tu rutina…" />
+      </Screen>
+    );
+  }
+  if (error || !exercise || !sessionId) {
+    return (
+      <Screen>
+        <Banner title="Ejercicio" big showBack onBack={() => router.replace(routes.patientHome)} />
+        <ErrorView message={error ?? "No se encontró el ejercicio de esta sesión."} onRetry={reload} big />
+      </Screen>
+    );
+  }
+  return <ActiveExercise exercise={exercise} sessionId={sessionId} />;
+}
 
-  // seIds = ids reales de session_exercises (CSV, ordenados por order_index)
-  // creados en POST /api/sessions. Resolvemos el del ejercicio actual por índice
-  // (EXERCISES y session_exercises comparten el mismo orden order_index).
-  const sessionExerciseId =
-    typeof seIds === 'string' && seIds.length > 0
-      ? seIds.split(',')[Number(index ?? 0)]
-      : undefined;
+// ─── Pantalla real ───────────────────────────────────────────────────────────
 
-  const [fontsLoaded] = useFonts({
-    PromptRegular: require('../../assets/fonts/Prompt-Regular.ttf'),
-    PromptBold:    require('../../assets/fonts/Prompt-SemiBold.ttf'),
-  });
+type HudStats = { fps: number; jsMs: number; phase: string; metrics: Record<string, number> };
 
+function ActiveExercise({ exercise, sessionId }: { exercise: ExercisePlan; sessionId: string }) {
+  useKeepAwake();
+  const router = useRouter();
+  const insets = useSafeAreaInsets();
   const { hasPermission, requestPermission } = useCameraPermission();
-  const device = useCameraDevice('front');
-
-  // Fijamos el formato más cercano a 640×480: MediaPipe reescala a 256×256 igual,
-  // así que convertir frames 1080p sería trabajo desperdiciado en el frame processor.
-  const format = useCameraFormat(device, [
-    { videoResolution: { width: 640, height: 480 } },
-  ]);
+  const device = useCameraDevice("front");
+  const format = useCameraFormat(device, [{ videoResolution: { width: 640, height: 480 } }]);
 
   const [cameraSize, setCameraSize] = useState({ width: 0, height: 0 });
-  const [poseFeedback, setPoseFeedback] = useState<string | null>(null);
-  const [poseFeedbackOk, setPoseFeedbackOk] = useState<boolean>(true);
-  const [localReps, setLocalReps]   = useState(0);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [visible, setVisible] = useState(false);
+  const [hud, setHud] = useState<HudStats | null>(null);
+  const [recording, setRecording] = useState(false);
 
-  const [progressError, setProgressError]   = useState<string | null>(null);
-
-  // Los landmarks NO viven en el estado del root: se envían directo al esqueleto
-  // por ref para que un frame nuevo no re-renderice ActiveExerciseScreen.
   const skeletonRef = useRef<PoseSkeletonHandle>(null);
+  const quality = useRef(new RepQualityTracker()).current;
+  const { feedback, push: pushFeedback, reset: resetFeedback } = useStableFeedback();
 
-  // Acumulador autoritativo de reps detectadas: useRef para no disparar render
-  // por frame; useState arriba sólo refleja el valor para el badge.
-  const localRepsRef = useRef(0);
+  // ── Persistencia con reintento (EX-11) ──
+  const pendingRef = useRef<{ series: number; reps: number; final: boolean } | null>(null);
+  const retryTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // session_id (de los params) y series ya persistidas: en refs para que el
-  // callback del frame processor lea siempre el valor vigente sin re-suscribirse.
-  const sessionIdRef        = useRef<string | null>(
-    typeof sessionId === 'string' && sessionId.length > 0 ? sessionId : null,
-  );
-  const seriesCompletedRef  = useRef(0);
-
-  // Reset de reps locales al cambiar de ejercicio
-  useEffect(() => {
-    localRepsRef.current = 0;
-    setLocalReps(0);
-  }, [exercise.exerciseId]);
-
-  // ── Persistir progreso al cerrar una serie (PUT) ────────────────────────────
-  const persistProgress = useCallback(
-    async (seriesCompleted: number, repsCompleted: number) => {
-      const sid = sessionIdRef.current;
-      if (!sid || !sessionExerciseId) return;
+  const persist = useCallback(
+    async (series: number, reps: number, final = false): Promise<boolean> => {
+      if (!exercise.sessionExerciseId) return true;
+      pendingRef.current = { series, reps, final };
+      const summary = quality.summary();
       try {
-        setProgressError(null);
-        await updateExerciseProgress(sid, sessionExerciseId, {
-          series_completed: seriesCompleted,
-          reps_completed: repsCompleted,
+        await updateExerciseProgress(sessionId, exercise.sessionExerciseId, {
+          series_completed: series,
+          reps_completed: reps,
+          accuracy_score: final ? summary.accuracy : undefined,
+          feedback: final ? summary.feedback : undefined,
         });
-      } catch (e: any) {
-        setProgressError(e?.message ?? 'No se pudo guardar el progreso');
+        pendingRef.current = null;
+        setSaveError(null);
+        return true;
+      } catch {
+        setSaveError("No se pudo guardar el progreso. Reintentando…");
+        if (retryTimer.current) clearTimeout(retryTimer.current);
+        retryTimer.current = setTimeout(() => {
+          const p = pendingRef.current;
+          if (p) void persist(p.series, p.reps, p.final);
+        }, RETRY_DELAY_MS);
+        return false;
       }
     },
-    [sessionExerciseId],
+    [exercise.sessionExerciseId, sessionId, quality]
   );
 
-  const validator = useExerciseValidator(exercise.exerciseId, 1);
+  useEffect(() => () => {
+    if (retryTimer.current) clearTimeout(retryTimer.current);
+    Speech.stop();
+  }, []);
 
-  // ── Frame counter (worklet-safe shared value para throttle) ────────────────
+  // ── Navegación al terminar ──
+  const navigatingRef = useRef(false);
+  const goNext = useCallback(async (state: SessionState) => {
+    if (navigatingRef.current) return;
+    navigatingRef.current = true;
+    speak("¡Muy bien! Ejercicio terminado");
+    buzz("done");
+    await persist(state.seriesCompleted, state.totalRepsDone, true);
+    if (exercise.exerciseIdx + 1 < exercise.totalExercises) {
+      router.replace({ pathname: routes.instruction, params: { sessionId, index: String(exercise.exerciseIdx + 1) } });
+    } else {
+      router.replace({ pathname: routes.surveyPost, params: { sessionId } });
+    }
+  }, [exercise.exerciseIdx, exercise.totalExercises, persist, router, sessionId]);
+
+  const session = useExerciseSession(exercise, {
+    onSeriesDone: (series, reps) => {
+      void persist(series, reps);
+    },
+    onExerciseDone: (state) => {
+      void goNext(state);
+    },
+  });
+  const { state } = session;
+  const stateRef = useRef(state);
+  stateRef.current = state;
+
+  // Validador: se resetea entero al empezar cada serie (EX-06).
+  const validator = useExerciseValidator(exercise.exerciseId, exercise.level, `${exercise.exerciseIdx}-${state.series}`);
+
+  // Arranque automático con permiso de cámara.
+  useEffect(() => {
+    if (hasPermission && state.phase === "idle") session.start();
+  }, [hasPermission, state.phase, session]);
+
+  // Voz por fase.
+  const lastSpoken = useRef<string>("");
+  useEffect(() => {
+    const key = `${state.phase}-${state.countdown}-${state.series}-${state.restRemaining}`;
+    if (key === lastSpoken.current) return;
+    lastSpoken.current = key;
+    if (state.phase === "countdown") speak(state.countdown > 0 ? String(state.countdown) : "¡Ahora!");
+    else if (state.phase === "active" && state.reps === 0) speak("¡Ahora!");
+    else if (state.phase === "rest" && state.restRemaining === exercise.restSeconds) {
+      speak(`¡Muy bien! Descansa ${exercise.restSeconds} segundos`);
+      buzz("series");
+    } else if (state.phase === "rest" && state.restRemaining === 3) speak("Prepárate");
+  }, [state.phase, state.countdown, state.series, state.restRemaining, state.reps, exercise.restSeconds]);
+
+  useEffect(() => {
+    if (state.phase !== "active") resetFeedback();
+  }, [state.phase, resetFeedback]);
+
+  // ── HUD / grabador (solo dev) ──
+  const hudRef = useRef({ frames: 0, jsMs: 0, windowStart: Date.now(), phase: "", metrics: {} as Record<string, number> });
+  const recordRef = useRef<{ t: number; lms: number[][] }[]>([]);
+  const recordingRef = useRef(false);
+
+  const toggleRecording = useCallback(async () => {
+    if (!__DEV__) return;
+    if (recordingRef.current) {
+      recordingRef.current = false;
+      setRecording(false);
+      const payload = { exerciseId: exercise.exerciseId, level: exercise.level, fps: hud?.fps ?? null, frames: recordRef.current };
+      recordRef.current = [];
+      try {
+        await Share.share({ title: `fixture-${exercise.exerciseId}.json`, message: JSON.stringify(payload) });
+      } catch {
+        // cancelado
+      }
+    } else {
+      recordRef.current = [];
+      recordingRef.current = true;
+      setRecording(true);
+    }
+  }, [exercise.exerciseId, exercise.level, hud?.fps]);
+
+  // ── Callback JS por frame ──
+  const onLandmarksDetected = useCallback(
+    (lms: Landmark[]) => {
+      skeletonRef.current?.update(lms);
+      const s = stateRef.current;
+
+      if (recordingRef.current && recordRef.current.length < MAX_RECORD_FRAMES) {
+        recordRef.current.push({ t: Date.now(), lms: lms.map((l) => [+l.x.toFixed(3), +l.y.toFixed(3), +l.z.toFixed(3), +l.visibility.toFixed(2)]) });
+      }
+
+      if (s.phase === "countdown") {
+        setVisible(lms.length > 0 && allVisible(lms, BODY_INDICES));
+        return;
+      }
+      if (s.phase !== "active") return;
+
+      const t0 = Date.now();
+      const result = validator.evaluate(lms);
+      const jsMs = Date.now() - t0;
+      quality.frame(result);
+
+      if (lms.length === 0) pushFeedback({ text: "No te vemos. Ponte frente a la cámara", ok: false });
+      else pushFeedback({ text: result.feedback, ok: result.ok }, result.repCompleted);
+
+      if (result.repCompleted) {
+        const n = s.reps + 1;
+        session.rep();
+        speak(n >= exercise.totalReps ? `${n}. ¡Serie completa!` : String(n));
+        buzz("rep");
+      }
+
+      if (__DEV__) {
+        const h = hudRef.current;
+        h.frames += 1;
+        h.jsMs = h.jsMs * 0.8 + jsMs * 0.2;
+        h.phase = result.phase;
+        h.metrics = result.metrics ?? {};
+        const now = Date.now();
+        if (now - h.windowStart >= 1000) {
+          const fps = h.frames / ((now - h.windowStart) / 1000);
+          h.frames = 0;
+          h.windowStart = now;
+          setHud((prev) => (prev ? { fps: +fps.toFixed(1), jsMs: +h.jsMs.toFixed(1), phase: h.phase, metrics: h.metrics } : prev));
+        }
+      }
+    },
+    [validator, quality, pushFeedback, session, exercise.totalReps]
+  );
+
+  const onLandmarksJS = useMemo(() => Worklets.createRunOnJS(onLandmarksDetected), [onLandmarksDetected]);
   const frameCount = useSharedValue(0);
 
-  // ── Callback JS: actualiza state y deriva feedback ────────────────────────
-  const onLandmarksDetected = useCallback((lms: Landmark[]) => {
-    skeletonRef.current?.update(lms);
-
-    if (lms.length === 0) {
-      setPoseFeedback('No se detecta el cuerpo');
-      setPoseFeedbackOk(false);
-      return;
-    }
-
-    const result = validator.evaluate(lms);
-    setPoseFeedback(result.feedback);
-    setPoseFeedbackOk(result.ok);
-
-    if (result.repCompleted) {
-      localRepsRef.current += 1;
-      setLocalReps(localRepsRef.current);
-
-      // ¿Se cerró una serie? Cada REP_GOAL reps cuenta como una serie completada
-      // → persistir el progreso acumulado al backend.
-      const seriesNow = Math.floor(localRepsRef.current / REP_GOAL);
-      if (seriesNow > seriesCompletedRef.current) {
-        seriesCompletedRef.current = seriesNow;
-        void persistProgress(seriesNow, localRepsRef.current);
-      }
-    }
-  }, [validator, persistProgress]);
-
-  // Bridge worklet → JS (estable entre renders gracias a useMemo)
-  const onLandmarksJS = useMemo(
-    () => Worklets.createRunOnJS(onLandmarksDetected),
-    [onLandmarksDetected],
+  const frameProcessor = useFrameProcessor(
+    (frame) => {
+      "worklet";
+      frameCount.value += 1;
+      if (frameCount.value % FRAME_INTERVAL !== 0) return;
+      if (posePlugin == null) return;
+      const result = posePlugin.call(frame) as unknown as Landmark[] | null;
+      onLandmarksJS(result ?? []);
+    },
+    [onLandmarksJS]
   );
-
-  // ── Frame processor ────────────────────────────────────────────────────────
-  const frameProcessor = useFrameProcessor((frame) => {
-    'worklet';
-    // Throttle: solo procesa 1 de cada FRAME_INTERVAL frames
-    frameCount.value += 1;
-    if (frameCount.value % FRAME_INTERVAL !== 0) return;
-
-    if (posePlugin == null) return;
-    const result = posePlugin.call(frame) as unknown as Landmark[] | null;
-    onLandmarksJS(result ?? []);
-  }, [onLandmarksJS]);
 
   const onCameraLayout = useCallback((e: LayoutChangeEvent) => {
     const { width, height } = e.nativeEvent.layout;
     setCameraSize({ width, height });
   }, []);
 
-  // ── Render guards ─────────────────────────────────────────────────────────
-  if (!fontsLoaded) return null;
+  // ── Acciones ──
+  const exit = async () => {
+    const wasActive = state.phase === "active" || state.phase === "countdown" || state.phase === "rest";
+    if (wasActive) session.pause();
+    const ok = await confirm(
+      "¿Salir del entrenamiento?",
+      `Llevas ${state.seriesCompleted} ${state.seriesCompleted === 1 ? "serie" : "series"} y ${state.totalRepsDone} repeticiones. Se guardará ese avance, pero la sesión de hoy quedará incompleta.`,
+      { confirmText: "Salir", destructive: true }
+    );
+    if (!ok) {
+      if (wasActive) session.resume();
+      return;
+    }
+    navigatingRef.current = true;
+    await persist(state.seriesCompleted, state.totalRepsDone, true);
+    router.replace(routes.patientHome);
+  };
 
+  const finishExercise = async () => {
+    const done = state.seriesCompleted >= exercise.totalSeries;
+    if (!done) {
+      const ok = await confirm("¿Saltar este ejercicio?", "Pasarás al siguiente sin completar todas las series.", { confirmText: "Saltar" });
+      if (!ok) return;
+    }
+    session.finish();
+  };
+
+  // ── Render ──
   if (!hasPermission) {
     return (
-      <LinearGradient colors={['#DEEDE6', '#90C0C1']} style={styles.permissionContainer}>
-        <Text style={styles.permissionText}>
-          Necesitamos acceso a tu cámara para el ejercicio.
-        </Text>
-        <TouchableOpacity style={styles.button} onPress={requestPermission}>
-          <Text style={styles.buttonText}>Otorgar Permiso</Text>
-        </TouchableOpacity>
-      </LinearGradient>
+      <Screen>
+        <Banner title="Necesitamos la cámara" big showBack onBack={() => router.replace(routes.patientHome)} />
+        <View style={styles.permission}>
+          <MaterialCommunityIcons name="camera-outline" size={72} color={Colors.btnTeal} />
+          <Text style={styles.permissionText}>Para contar tus repeticiones necesitamos ver tus movimientos con la cámara.</Text>
+          <Button title="Permitir cámara" size="patient" onPress={requestPermission} />
+        </View>
+      </Screen>
+    );
+  }
+  if (device == null) {
+    return (
+      <Screen>
+        <LoadingView label="Buscando la cámara…" />
+      </Screen>
     );
   }
 
-  if (device == null) {
-    return <View style={styles.container}><ActivityIndicator size="large" /></View>;
-  }
-
-  const activeFeedback = poseFeedback ?? null;
+  const cameraActive = state.phase === "countdown" || state.phase === "active";
+  const progress = Math.min(1, state.reps / exercise.totalReps);
 
   return (
-    <LinearGradient colors={['#DEEDE6', '#90C0C1']} style={styles.container}>
-
-      <View style={styles.header}>
-        <TouchableOpacity onPress={() => router.back()} style={{ padding: 6 }}>
-          <Ionicons name="arrow-back" size={30} color="#DEEDE6" />
-        </TouchableOpacity>
-        <Text style={styles.headerTitle} numberOfLines={1}>
-          {exercise.exerciseName}
-        </Text>
-        <View style={{ width: 30 }} />
+    <View style={styles.root}>
+      <View style={styles.cameraWrap} onLayout={onCameraLayout}>
+        <Camera style={StyleSheet.absoluteFill} device={device} format={format} isActive={cameraActive} frameProcessor={frameProcessor} pixelFormat="yuv" />
+        <PoseSkeleton ref={skeletonRef} width={cameraSize.width} height={cameraSize.height} />
       </View>
 
-      {/* ── Cámara a pantalla completa con controles superpuestos ──────── */}
-      <View style={styles.content} onLayout={onCameraLayout}>
-        <Camera
-          style={StyleSheet.absoluteFill}
-          device={device}
-          format={format}
-          isActive={true}
-          frameProcessor={frameProcessor}
-          pixelFormat="yuv"
-          zoom={0.75}
-          onLayout={onCameraLayout}
-        />
-
-        {/* Overlay SVG de esqueleto */}
-        <PoseSkeleton
-          ref={skeletonRef}
-          width={cameraSize.width}
-          height={cameraSize.height}
-        />
-
-        {/* ── Controles superpuestos en la parte inferior ─────────────── */}
-        <View style={styles.controlsOverlay}>
-          {/* Aviso no bloqueante si falló el guardado de progreso */}
-          {progressError && (
-            <View style={[styles.feedbackBadge, { backgroundColor: '#E75756' }]}>
-              <Ionicons name="cloud-offline-outline" size={26} color="#DEEDE6" style={{ marginRight: 10 }} />
-              <Text style={styles.feedbackText}>{progressError}</Text>
-            </View>
-          )}
-
-          {/* Badge de feedback */}
-          {activeFeedback && (
-            <View style={[
-              styles.feedbackBadge,
-              { backgroundColor: poseFeedbackOk ? '#27695A' : '#E75756' },
-            ]}>
-              <Ionicons
-                name={poseFeedbackOk ? 'checkmark-circle-outline' : 'warning-outline'}
-                size={26}
-                color="#DEEDE6"
-                style={{ marginRight: 10 }}
-              />
-              <Text style={styles.feedbackText}>{activeFeedback}</Text>
-            </View>
-          )}
-
-          <View style={styles.progressSection}>
-            <Text style={styles.seriesText}>
-              Serie {1} de {1}
-            </Text>
-            <View style={styles.progressBarBackground}>
-              <View
-                style={[
-                  styles.progressBarFill,
-                  {
-                    width: `${((0 + localReps) / 10) * 100}%`,
-                  },
-                ]}
-              />
-            </View>
-          </View>
-
-          <View style={styles.repsBadge}>
-            <Text style={styles.repsNumbers}>
-              {0 + localReps}/{10}
-            </Text>
-            <Text style={styles.repsLabel}>Repeticiones</Text>
-          </View>
-
-          <TouchableOpacity style={styles.pauseButton}>
-            <Text style={styles.pauseButtonText}>Pausar</Text>
+      {/* ── Top bar ── */}
+      <View style={[styles.top, { paddingTop: insets.top + 8 }]}>
+        <TouchableOpacity style={styles.iconBtn} onPress={exit} accessibilityRole="button" accessibilityLabel="Salir del entrenamiento">
+          <MaterialCommunityIcons name="close" size={30} color={Colors.textOnDark} />
+        </TouchableOpacity>
+        <View style={{ flex: 1 }}>
+          <Text style={styles.topTitle} numberOfLines={1}>{exercise.name}</Text>
+          <Text style={styles.topSub}>
+            Ejercicio {exercise.exerciseIdx + 1} de {exercise.totalExercises} · Serie {Math.min(state.series, exercise.totalSeries)} de {exercise.totalSeries}
+          </Text>
+        </View>
+        {__DEV__ && (
+          <TouchableOpacity style={[styles.iconBtn, recording && { backgroundColor: Colors.btnDanger }]} onPress={toggleRecording} accessibilityLabel="Grabar fixture">
+            <MaterialCommunityIcons name={recording ? "stop" : "record"} size={26} color={Colors.textOnDark} />
           </TouchableOpacity>
+        )}
+      </View>
 
-          <TouchableOpacity
-            style={styles.endButton}
-            onPress={() => {
-              const currentIndex = Number(index ?? 0);
-              if (currentIndex < EXERCISES.length - 1) {
-                // Propagar sessionId y seIds al siguiente ejercicio: sin esto el
-                // PUT de progreso queda sin ids del 2do ejercicio en adelante.
-                const sid = sessionIdRef.current ?? '';
-                router.push(
-                  `/instruction?index=${currentIndex + 1}&sessionId=${sid}&seIds=${seIds ?? ''}`
-                );
-              } else {
-                // Pasamos el session_id para que la pantalla final pueda
-                // llamar a POST /api/sessions/{id}/complete.
-                router.push({
-                  pathname: '/post-exercise-survey',
-                  params: { sessionId: sessionIdRef.current ?? '' },
-                });
-              }
-            }}
-          >
-            <Text style={styles.endButtonText}>Terminar</Text>
-          </TouchableOpacity>
+      {/* ── Overlays de fase ── */}
+      {state.phase === "countdown" && (
+        <View style={styles.overlay}>
+          <MaterialCommunityIcons name="human-handsup" size={180} color="rgba(255,255,255,0.35)" />
+          <Text style={styles.countdown}>{state.countdown}</Text>
+          <View style={[styles.visibilityPill, { backgroundColor: visible ? Colors.success : Colors.btnDanger }]}>
+            <MaterialCommunityIcons name={visible ? "check-circle" : "alert-circle"} size={26} color={Colors.textOnDark} />
+            <Text style={styles.visibilityText}>{visible ? "¡Te vemos completo!" : "Aléjate hasta que se vea todo tu cuerpo"}</Text>
+          </View>
+        </View>
+      )}
+
+      {state.phase === "rest" && (
+        <View style={styles.overlay}>
+          <Text style={styles.overlayTitle}>Descanso</Text>
+          <Text style={styles.countdown}>{state.restRemaining}</Text>
+          <Text style={styles.overlayBody}>Siguiente: serie {state.series} de {exercise.totalSeries}</Text>
+          <Button title="Saltar descanso" size="patient" variant="outline" onPress={session.skipRest} style={{ marginTop: 20, minWidth: 260 }} />
+        </View>
+      )}
+
+      {state.phase === "paused" && (
+        <View style={styles.overlay}>
+          <MaterialCommunityIcons name="pause-circle-outline" size={96} color={Colors.textOnDark} />
+          <Text style={styles.overlayTitle}>En pausa</Text>
+          <Text style={styles.overlayBody}>Tómate tu tiempo. Cuando quieras, continúa.</Text>
+          <Button title="Continuar" size="patient" icon="play" onPress={session.resume} style={{ marginTop: 20, minWidth: 260 }} testID="resume" />
+          <Button title="Salir" size="patient" variant="outline" onPress={exit} style={{ marginTop: 12, minWidth: 260 }} />
+        </View>
+      )}
+
+      {state.phase === "exerciseDone" && (
+        <View style={styles.overlay}>
+          <MaterialCommunityIcons name="check-decagram" size={96} color={Colors.btnPrimary} />
+          <Text style={styles.overlayTitle}>¡Ejercicio terminado!</Text>
+          <Text style={styles.overlayBody}>Guardando tu progreso…</Text>
+        </View>
+      )}
+
+      {/* ── Controles inferiores ── */}
+      <View style={[styles.bottom, { paddingBottom: insets.bottom + 16 }]}>
+        {saveError && (
+          <View style={[styles.feedback, { backgroundColor: Colors.btnDanger }]}>
+            <MaterialCommunityIcons name="cloud-off-outline" size={24} color={Colors.textOnDark} />
+            <Text style={styles.feedbackText}>{saveError}</Text>
+          </View>
+        )}
+        {state.phase === "active" && feedback.text ? (
+          <View style={[styles.feedback, { backgroundColor: feedback.ok ? Colors.btnDark : Colors.btnDanger }]} accessibilityLiveRegion="polite">
+            <MaterialCommunityIcons name={feedback.ok ? "check-circle-outline" : "alert-outline"} size={26} color={Colors.textOnDark} />
+            <Text style={styles.feedbackText} numberOfLines={2}>{feedback.text}</Text>
+          </View>
+        ) : null}
+
+        <TouchableOpacity onLongPress={() => __DEV__ && setHud((h) => (h ? null : { fps: 0, jsMs: 0, phase: "", metrics: {} }))} activeOpacity={1} accessibilityLabel={`${state.reps} de ${exercise.totalReps} repeticiones`}>
+          <Text style={styles.counter}>
+            {state.reps}
+            <Text style={styles.counterTotal}> / {exercise.totalReps}</Text>
+          </Text>
+        </TouchableOpacity>
+        <View style={styles.progressTrack}>
+          <View style={[styles.progressFill, { width: `${progress * 100}%` }]} />
+        </View>
+
+        <View style={styles.actions}>
+          {state.phase === "active" || state.phase === "countdown" ? (
+            <Button title="Pausar" size="patient" variant="outline" icon="pause" onPress={session.pause} style={{ flex: 1 }} testID="pause" />
+          ) : null}
+          <Button
+            title={state.seriesCompleted >= exercise.totalSeries ? "Terminar" : "Saltar ejercicio"}
+            size="patient"
+            variant={state.seriesCompleted >= exercise.totalSeries ? "primary" : "danger"}
+            onPress={finishExercise}
+            style={{ flex: 1 }}
+            disabled={state.phase === "exerciseDone"}
+          />
         </View>
       </View>
-    </LinearGradient>
+
+      {__DEV__ && hud && (
+        <View style={[styles.hud, { top: insets.top + 84 }]} pointerEvents="none">
+          <Text style={styles.hudText}>det {hud.fps} fps · js {hud.jsMs} ms</Text>
+          <Text style={styles.hudText}>fase {hud.phase} · nivel {exercise.level}</Text>
+          {Object.entries(hud.metrics).map(([k, v]) => (
+            <Text key={k} style={styles.hudText}>{k}: {typeof v === "number" ? v.toFixed(1) : String(v)}</Text>
+          ))}
+        </View>
+      )}
+    </View>
   );
 }
 
-// ─── Styles ───────────────────────────────────────────────────────────────────
 const styles = StyleSheet.create({
-  container:           { flex: 1 },
-  permissionContainer: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: 24 },
-  permissionText: {
-    fontSize: 22, textAlign: 'center', marginBottom: 24,
-    fontFamily: 'PromptBold', color: '#27695A', lineHeight: 30,
-  },
-  button: { backgroundColor: '#7BB899', paddingVertical: 18, paddingHorizontal: 28, borderRadius: 16 },
-  buttonText: { color: '#DEEDE6', fontFamily: 'PromptBold', fontSize: 22 },
-  header: {
-    flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
-    paddingTop: 54, paddingHorizontal: 20, paddingBottom: 18,
-    backgroundColor: '#49A2A5', borderBottomLeftRadius: 24, borderBottomRightRadius: 24,
-  },
-  headerTitle: {
-    flex: 1, textAlign: 'center', color: '#DEEDE6', fontSize: 24, fontFamily: 'PromptBold',
-  },
-  content: { flex: 1, position: 'relative', backgroundColor: '#27695A' },
-  controlsOverlay: {
-    position: 'absolute', bottom: 0, left: 0, right: 0,
-    padding: 20, paddingBottom: 30, alignItems: 'center',
-    backgroundColor: 'rgba(0,0,0,0.40)',
-    borderTopLeftRadius: 20, borderTopRightRadius: 20,
-  },
-  feedbackBadge: {
-    flexDirection: 'row', alignItems: 'center',
-    paddingVertical: 14, paddingHorizontal: 20, borderRadius: 12,
-    width: '92%', justifyContent: 'center', marginBottom: 12,
-  },
-  feedbackText:   { color: '#DEEDE6', fontFamily: 'PromptBold', fontSize: 20, flexShrink: 1 },
-  progressSection: { width: '100%', marginBottom: 16 },
-  seriesText:      { fontSize: 20, color: '#DEEDE6', fontFamily: 'PromptBold', marginBottom: 8 },
-  progressBarBackground: { height: 14, backgroundColor: 'rgba(255,255,255,0.3)', borderRadius: 8, overflow: 'hidden' },
-  progressBarFill:       { height: '100%', backgroundColor: '#7BB899', borderRadius: 8 },
-  repsBadge: {
-    flexDirection: 'row', alignItems: 'center',
-    backgroundColor: 'rgba(255,255,255,0.15)', borderWidth: 2, borderColor: '#DEEDE6',
-    borderRadius: 30, paddingVertical: 12, paddingHorizontal: 28, marginBottom: 18,
-  },
-  repsNumbers:    { fontSize: 36, fontFamily: 'PromptBold', color: '#DEEDE6', marginRight: 12 },
-  repsLabel:      { fontSize: 22, color: '#DEEDE6', fontFamily: 'PromptBold' },
-  pauseButton: {
-    width: '85%', backgroundColor: 'rgba(255,255,255,0.15)', borderWidth: 2, borderColor: '#DEEDE6',
-    paddingVertical: 16, borderRadius: 16, alignItems: 'center', marginBottom: 12,
-  },
-  pauseButtonText: { color: '#DEEDE6', fontSize: 24, fontFamily: 'PromptBold' },
-  endButton:       { width: '85%', backgroundColor: '#E75756', paddingVertical: 16, borderRadius: 16, alignItems: 'center' },
-  endButtonText:   { color: '#DEEDE6', fontSize: 24, fontFamily: 'PromptBold' },
+  root: { flex: 1, backgroundColor: "#0B2F27" },
+  cameraWrap: { ...StyleSheet.absoluteFillObject },
+  top: { flexDirection: "row", alignItems: "center", gap: 10, paddingHorizontal: 14, paddingBottom: 12, backgroundColor: "rgba(0,0,0,0.35)" },
+  iconBtn: { width: 52, height: 52, borderRadius: 26, backgroundColor: "rgba(0,0,0,0.35)", alignItems: "center", justifyContent: "center" },
+  topTitle: { fontSize: FontSize.xxl, fontFamily: Fonts.bold, color: Colors.textOnDark },
+  topSub: { fontSize: FontSize.md, fontFamily: Fonts.regular, color: Colors.textOnDark },
+  overlay: { ...StyleSheet.absoluteFillObject, alignItems: "center", justifyContent: "center", backgroundColor: "rgba(11,47,39,0.78)", padding: 24 },
+  overlayTitle: { fontSize: FontSize.hero, fontFamily: Fonts.bold, color: Colors.textOnDark, textAlign: "center", marginTop: 8 },
+  overlayBody: { fontSize: FontSize.patient.body, fontFamily: Fonts.regular, color: Colors.textOnDark, textAlign: "center", marginTop: 8, lineHeight: 30 },
+  countdown: { fontSize: 120, fontFamily: Fonts.bold, color: Colors.textOnDark, lineHeight: 130 },
+  visibilityPill: { flexDirection: "row", alignItems: "center", gap: 10, paddingHorizontal: 18, paddingVertical: 12, borderRadius: 16, marginTop: 12, maxWidth: "92%" },
+  visibilityText: { fontSize: FontSize.patient.body, fontFamily: Fonts.bold, color: Colors.textOnDark, flexShrink: 1 },
+  bottom: { position: "absolute", bottom: 0, left: 0, right: 0, padding: 16, alignItems: "center", backgroundColor: "rgba(0,0,0,0.45)", borderTopLeftRadius: 24, borderTopRightRadius: 24 },
+  feedback: { flexDirection: "row", alignItems: "center", gap: 10, paddingVertical: 12, paddingHorizontal: 18, borderRadius: 14, width: "100%", marginBottom: 10 },
+  feedbackText: { color: Colors.textOnDark, fontFamily: Fonts.bold, fontSize: FontSize.patient.body, flexShrink: 1 },
+  counter: { fontSize: FontSize.counter, fontFamily: Fonts.bold, color: Colors.textOnDark, lineHeight: 72 },
+  counterTotal: { fontSize: FontSize.title, color: "rgba(222,237,230,0.8)" },
+  progressTrack: { height: 14, width: "100%", backgroundColor: "rgba(255,255,255,0.25)", borderRadius: 8, overflow: "hidden", marginVertical: 12 },
+  progressFill: { height: "100%", backgroundColor: Colors.btnPrimary, borderRadius: 8 },
+  actions: { flexDirection: "row", gap: 12, width: "100%" },
+  permission: { flex: 1, alignItems: "center", justifyContent: "center", padding: 24, gap: 20 },
+  permissionText: { fontSize: FontSize.patient.body, fontFamily: Fonts.regular, color: Colors.textPrimary, textAlign: "center", lineHeight: 30 },
+  hud: { position: "absolute", left: 12, backgroundColor: "rgba(0,0,0,0.6)", padding: 8, borderRadius: 8 },
+  hudText: { color: "#76FF03", fontSize: 12, fontFamily: "monospace" },
 });
