@@ -42,7 +42,9 @@ def create_access_token(user_id: str, role: str) -> tuple[str, int]:
 
 
 def decode_token(token: str) -> dict:
+    # `require_exp`: un token sin vencimiento sería eterno; se rechaza aunque la
+    # firma sea válida (hallazgo del stack de seguridad, 2026-09-17).
     try:
-        return jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        return jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM], options={"require_exp": True})
     except JWTError:
         return {}

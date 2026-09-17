@@ -3,6 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from app.core.middleware import RejectNulBytesMiddleware
 from app.database import get_db
 from app.routers import (
     admins,
@@ -19,6 +20,9 @@ from app.routers import (
 )
 
 app = FastAPI(title="ActivaMente API", version="1.1.0")
+
+# Bytes NUL en path/query/body → 422 antes de llegar a Postgres (si no, 500).
+app.add_middleware(RejectNulBytesMiddleware)
 
 # allow_origins=["*"] con allow_credentials=True es una combinación inválida para
 # navegadores (HC-14). La app móvil no usa cookies, así que credentials=False.

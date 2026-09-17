@@ -29,7 +29,7 @@ from app.schemas.user_schema import (
 router = APIRouter(prefix="/api/users", tags=["users"])
 
 
-_TEMP_PASSWORD_SYMBOLS = "!#$"
+_TEMP_PASSWORD_SYMBOLS = "!#$"  # nosec B105: símbolos de la clave temporal, no una clave
 
 
 def _generate_temp_password(name: str) -> str:
@@ -152,7 +152,7 @@ def list_users(
 
 @router.patch("/{user_id}/status", response_model=UserListItem)
 def update_user_status(
-    user_id: str,
+    user_id: UUID,
     body: UserStatusUpdate,
     db: Session = Depends(get_db),
     admin: User = Depends(require_admin),
@@ -189,7 +189,7 @@ def set_user_password(
 
 @router.patch("/{user_id}", response_model=UserListItem)
 def update_user(
-    user_id: str,
+    user_id: UUID,
     body: UpdateUserRequest,
     db: Session = Depends(get_db),
     _admin: User = Depends(require_admin),

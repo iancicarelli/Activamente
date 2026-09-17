@@ -115,6 +115,17 @@ def client(db):
     app.dependency_overrides.clear()
 
 
+# ── Capas del stack: marcador automático por carpeta (ver pytest.ini) ────────
+_LAYER_BY_DIR = {"smoke": "smoke", "unit": "unit", "e2e": "e2e", "security": "security", "live": "live"}
+
+
+def pytest_collection_modifyitems(config, items):
+    for item in items:
+        parent = Path(str(item.fspath)).parent.name
+        layer = _LAYER_BY_DIR.get(parent, "integration")
+        item.add_marker(getattr(pytest.mark, layer))
+
+
 # ── Helpers de autenticación ────────────────────────────────────────────────
 # Los tokens se firman directamente (sin pasar por bcrypt en cada test).
 
