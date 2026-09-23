@@ -23,12 +23,14 @@
 
 import { ExerciseValidator } from "../types";
 import { toeTouchValidator } from "./toeTouch";
+import { legElevationValidator } from "./legElevation";
 import { legRaiseValidator } from "./legRaise";
 import { shoulderRaisesValidator } from "./shoulderRaises";
 import { squatValidator } from "./squat";
 
 export const exerciseRegistry: Record<string, ExerciseValidator> = {
   toe_touch: toeTouchValidator,
+  leg_elevation: legElevationValidator,
   leg_raise: legRaiseValidator,
   shoulder_raises: shoulderRaisesValidator,
   squat: squatValidator,

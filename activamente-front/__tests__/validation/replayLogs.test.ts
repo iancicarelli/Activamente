@@ -31,8 +31,8 @@ function replay(name: string, log: Log) {
   let maxMetric = -Infinity;
   for (const f of active) {
     const lms: Landmark[] = f.lms.map(([x, y, z, visibility]) => ({ x, y, z, visibility }));
-    const r = fn(lms, state);
     const t = (f as { t?: number }).t ?? 0;
+    const r = fn(lms, state, t);
     if (!r.ok && !r.metrics) invisible += 1;
     const main = r.metrics ? Object.values(r.metrics)[0] : undefined;
     if (r.phase === "standing" && !r.repCompleted) {

@@ -34,9 +34,9 @@ export function useExerciseValidator(exerciseId: string | undefined, level: numb
   }, []);
 
   const evaluate = useCallback(
-    (lms: Landmark[]): ValidatorResult => {
+    (lms: Landmark[], t: number = Date.now()): ValidatorResult => {
       if (!validatorFn) return NOOP_RESULT;
-      return validatorFn(lms, stateRef.current);
+      return validatorFn(lms, stateRef.current, t);
     },
     [validatorFn]
   );

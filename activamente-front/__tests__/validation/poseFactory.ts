@@ -91,6 +91,36 @@ export function legRaise(hip: number, kneeBend = 0): Landmark[] {
   return lms;
 }
 
+/**
+ * Marcha en el lugar: sube la rodilla `side` a `elevation`, la métrica de
+ * legElevation ((cadera.y − rodilla.y) / torso). En `standing()` el torso mide
+ * 0.25 (cadera 0.55 − hombro 0.30) y la rodilla está en −0.8.
+ */
+export function kneeRaise(side: "left" | "right", elevation: number): Landmark[] {
+  const lms = standing();
+  const torso = 0.25;
+  const [hipIdx, kneeIdx, ankleIdx] =
+    side === "left" ? [I.LEFT_HIP, I.LEFT_KNEE, I.LEFT_ANKLE] : [I.RIGHT_HIP, I.RIGHT_KNEE, I.RIGHT_ANKLE];
+  const hip = lms[hipIdx];
+  const kneeY = hip.y - elevation * torso;
+  lms[kneeIdx] = lm(hip.x, kneeY);
+  lms[ankleIdx] = lm(hip.x, kneeY + 0.2);
+  return lms;
+}
+
+/**
+ * Marcha alternando piernas: `reps` subidas, empezando por `first`. Una rep de
+ * legElevation es UNA rodilla, así que cada elevación usa su propia secuencia.
+ */
+export function marchSequence(reps: number, elevation: number, first: "left" | "right" = "left"): Landmark[][] {
+  const out: Landmark[][] = [];
+  for (let r = 0; r < reps; r++) {
+    const side = r % 2 === 0 ? first : first === "left" ? "right" : "left";
+    out.push(...repSequence(1, (t) => kneeRaise(side, lerp(-0.8, elevation, t))));
+  }
+  return out;
+}
+
 /** Ruido determinista ±amp en x/y sobre cada landmark. */
 export function jitter(lms: Landmark[], amp: number, seed: number): Landmark[] {
   let s = seed;

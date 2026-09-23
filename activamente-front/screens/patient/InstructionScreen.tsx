@@ -17,6 +17,7 @@ import { isBetaExercise } from "../../validation/validators/exerciseRegistry";
 
 const VIDEO_MAP: Record<string, any> = {
   toe_touch: require("../../assets/videos/toe_touch.mp4"),
+  leg_elevation: require("../../assets/videos/leg_elevation.mp4"),
   leg_raise: require("../../assets/videos/leg_raise.mp4"),
   shoulder_raises: require("../../assets/videos/shoulder_raises.mp4"),
   squat: require("../../assets/videos/squat.mp4"),

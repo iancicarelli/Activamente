@@ -123,15 +123,6 @@ function ActiveExercise({ exercise, sessionId }: { exercise: ExercisePlan; sessi
   // Log automático del ejercicio (solo dev): un archivo por ejercicio, se escribe
   // al cerrar cada serie, al terminar y al salir.
   const logger = useRef<ExerciseLogger | null>(null);
-  if (__DEV__ && logger.current === null) {
-    logger.current = new ExerciseLogger({
-      exerciseId: exercise.exerciseId,
-      level: exercise.level,
-      totalSeries: exercise.totalSeries,
-      totalReps: exercise.totalReps,
-      sessionId,
-    });
-  }
 
   // ── Persistencia con reintento (EX-11) ──
   const pendingRef = useRef<{ series: number; reps: number; final: boolean } | null>(null);
@@ -164,6 +155,23 @@ function ActiveExercise({ exercise, sessionId }: { exercise: ExercisePlan; sessi
     },
     [exercise.sessionExerciseId, sessionId, quality]
   );
+
+  // El logger se crea en un EFECTO, no durante el render. Mutar un ref mientras
+  // se renderiza es ilegal con `reactCompiler: true` (app.json): el compilador
+  // puede memoizar el render y saltarse la asignación. El 2026-09-22 eso dejó dos
+  // sesiones enteras sin log — la pantalla corría, contaba y persistía al backend,
+  // pero el archivo no se creaba nunca y no había ningún error a la vista.
+  useEffect(() => {
+    if (!__DEV__ || logger.current !== null) return;
+    logger.current = new ExerciseLogger({
+      exerciseId: exercise.exerciseId,
+      level: exercise.level,
+      totalSeries: exercise.totalSeries,
+      totalReps: exercise.totalReps,
+      sessionId,
+    });
+    console.warn("[exerciseLog] listo →", logger.current.uri ?? "SIN ARCHIVO (falló la creación)");
+  }, [exercise.exerciseId, exercise.level, exercise.totalSeries, exercise.totalReps, sessionId]);
 
   useEffect(() => () => {
     if (retryTimer.current) clearTimeout(retryTimer.current);

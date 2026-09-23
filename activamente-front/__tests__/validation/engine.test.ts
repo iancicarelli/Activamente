@@ -1,5 +1,5 @@
 import { calcularAngulo, calcularAngulo2D, distanciaX, distanciaY } from "../../validation/geometry";
-import { createPhaseMachine, smooth, stabilizePhase } from "../../validation/stabilize";
+import { restBaseline, smooth, stabilizePhase } from "../../validation/stabilize";
 import { createValidatorState } from "../../validation/types";
 import { RepQualityTracker } from "../../validation/quality";
 
@@ -17,40 +17,49 @@ describe("geometry", () => {
 });
 
 describe("stabilize", () => {
-  test("smooth promedia con ventana", () => {
+  test("smooth promedia sobre una ventana de MILISEGUNDOS, no de frames", () => {
     const s = createValidatorState();
-    expect(smooth(s, "a", 10, 3)).toBe(10);
-    expect(smooth(s, "a", 20, 3)).toBe(15);
-    expect(smooth(s, "a", 30, 3)).toBe(20);
-    expect(smooth(s, "a", 40, 3)).toBe(30);
-    expect(s.buffers.a).toHaveLength(3);
+    expect(smooth(s, "a", 0, 10, 500)).toBe(10);
+    expect(smooth(s, "a", 100, 20, 500)).toBe(15);
+    expect(smooth(s, "a", 200, 30, 500)).toBe(20);
+    // A 1.25 fps el frame anterior ya quedó fuera de la ventana: no promedia con él.
+    expect(smooth(s, "a", 800, 40, 500)).toBe(40);
   });
 
-  test("stabilizePhase exige N frames iguales", () => {
+  test("la misma ventana cubre más frames a más fps (EX-47)", () => {
+    const lento = createValidatorState();
+    const rapido = createValidatorState();
+    for (let i = 0; i < 10; i++) smooth(lento, "a", i * 200, 1, 400); // 5 fps
+    for (let i = 0; i < 10; i++) smooth(rapido, "a", i * 40, 1, 400); // 25 fps
+    expect(lento.windows.a.v.length).toBeLessThan(rapido.windows.a.v.length);
+  });
+
+  test("stabilizePhase exige que la fase se sostenga el tiempo pedido", () => {
     const s = createValidatorState();
-    expect(stabilizePhase(s, "descending", 2)).toBe("standing");
-    expect(stabilizePhase(s, "hold", 2)).toBe("standing");
-    expect(stabilizePhase(s, "hold", 2)).toBe("hold");
+    expect(stabilizePhase(s, 0, "descending", 200)).toBe("standing");
+    expect(stabilizePhase(s, 100, "hold", 200)).toBe("standing"); // cambió, no confirma
+    expect(stabilizePhase(s, 200, "hold", 200)).toBe("standing"); // aún mezclada
+    expect(stabilizePhase(s, 300, "hold", 200)).toBe("hold"); // 200 ms sostenidos
   });
 
-  test("máquina 'high' con histéresis", () => {
-    const m = createPhaseMachine({ standingEnter: 160, standingExit: 150, standingIs: "high" });
-    expect(m("standing", 155, false)).toBe("standing"); // no bajó de exit
-    expect(m("standing", 149, false)).toBe("descending");
-    expect(m("descending", 155, false)).toBe("descending"); // no superó enter
-    expect(m("descending", 161, false)).toBe("standing");
-    expect(m("descending", 100, true)).toBe("hold");
-    expect(m("hold", 120, false)).toBe("ascending");
-    expect(m("ascending", 130, false)).toBe("ascending");
+  test("restBaseline sigue el reposo de la persona, no un valor fijo (EX-46)", () => {
+    const s = createValidatorState();
+    // De pie en 170°, con bajadas a 100° (las repeticiones).
+    let t = 0;
+    for (let i = 0; i < 40; i++, t += 200) restBaseline(s, "r", t, i % 5 === 0 ? 100 : 170, "high");
+    expect(restBaseline(s, "r", t, 170, "high")).toBeGreaterThan(160); // las bajadas no arrastran el reposo
   });
 
-  test("máquina 'low' (brazos)", () => {
-    const m = createPhaseMachine({ standingEnter: 45, standingExit: 55, standingIs: "low" });
-    expect(m("standing", 50, false)).toBe("standing");
-    expect(m("standing", 60, false)).toBe("descending");
-    expect(m("descending", 50, false)).toBe("descending");
-    expect(m("descending", 40, false)).toBe("standing");
-    expect(m("descending", 90, true)).toBe("hold");
+  test("restBaseline acompaña la deriva de postura", () => {
+    const s = createValidatorState();
+    let t = 0;
+    for (let i = 0; i < 40; i++, t += 200) restBaseline(s, "r", t, 170, "high");
+    const antes = restBaseline(s, "r", t, 170, "high");
+    // La persona deja de estirar del todo las piernas: su reposo real baja a 156°.
+    for (let i = 0; i < 70; i++, t += 200) restBaseline(s, "r", t, 156, "high");
+    const despues = restBaseline(s, "r", t, 156, "high");
+    expect(antes).toBeGreaterThan(165);
+    expect(despues).toBeLessThan(160);
   });
 });
 

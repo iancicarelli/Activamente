@@ -35,8 +35,21 @@ export type ValidatorState = {
   prevAngle: number;
   repCount: number;
   buffers: Record<string, number[]>;
-  phaseHistory: ValidatorPhase[];
+  // Fase CRUDA del último frame y desde cuándo se sostiene, en ms. Una fase solo
+  // se confirma tras `confirmMs` estable (antes era una lista de N frames, que a
+  // 4.8 fps significaba el doble de tiempo que a 25 fps).
+  rawPhase: ValidatorPhase;
+  rawSince: number;
   frames: number;
+  // Estado propio de un validador (banderas, lados, contadores). Se resetea con
+  // el resto. Numérico a propósito: `extra` viaja en el mismo objeto plano que
+  // el HUD y el log serializan sin ceremonia. Ej.: legElevation guarda qué
+  // pierna subió para exigir alternancia.
+  extra: Record<string, number>;
+  // Ventanas temporales (EX-47): valores con su timestamp, por clave. Reemplazan
+  // a los buffers por cantidad de frames, que significaban cosas distintas a
+  // 5 fps (620 ms) y a 25 fps (120 ms).
+  windows: Record<string, { t: number[]; v: number[] }>;
 };
 
 export const createValidatorState = (): ValidatorState => ({
@@ -44,11 +57,16 @@ export const createValidatorState = (): ValidatorState => ({
   prevAngle: 180,
   repCount: 0,
   buffers: {},
-  phaseHistory: [],
+  rawPhase: "standing",
+  rawSince: 0,
   frames: 0,
+  extra: {},
+  windows: {},
 });
 
-export type ValidatorFn = (lms: Landmark[], state: ValidatorState) => ValidatorResult;
+// `t` es el instante del frame en ms. Viene del teléfono (Date.now()) o del log
+// al reproducirlo, para que el replay sea determinista (scripts/replay-logs.sh).
+export type ValidatorFn = (lms: Landmark[], state: ValidatorState, t: number) => ValidatorResult;
 
 export type ExerciseValidator = {
   id: string;

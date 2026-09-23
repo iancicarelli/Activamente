@@ -3,8 +3,8 @@
  *
  * Métrica: ángulo hombro→cadera→rodilla de la pierna que se levanta. De pie
  * (pierna abajo) ~170–180°; al elevar la pierna al frente el ángulo BAJA.
- * Histéresis 165/158. Se toma la pierna con menor ángulo (la que sube) cuando
- * se ven ambas; si se ve un solo lado, ese.
+ * Bandas 20/13 sobre el reposo. Se toma la pierna con menor ángulo (la que sube)
+ * cuando se ven ambas; si se ve un solo lado, ese.
  *
  * Niveles (elevación): 1 → ≤150° (30°) · 2 → ≤135° (45°) · 3 → ≤120° (60°).
  */
@@ -22,17 +22,20 @@ import {
   RIGHT_SHOULDER,
   LOWER_BODY_INDICES,
 } from "../landmarkIndices";
-import { allVisible, createPhaseMachine, createStabilizedValidator } from "../stabilize";
+import { allVisible, createStabilizedValidator } from "../stabilize";
 
 const LEFT_INDICES = [LEFT_SHOULDER, LEFT_HIP, LEFT_KNEE, LEFT_ANKLE];
 const RIGHT_INDICES = [RIGHT_SHOULDER, RIGHT_HIP, RIGHT_KNEE, RIGHT_ANKLE];
 
-const STANDING_ENTER_HIP_ANGLE = 165;
-const STANDING_EXIT_HIP_ANGLE = 158;
+// Bandas RELATIVAS al reposo (EX-46). Antes 165/158 absolutos.
+const EXIT_BAND = 20; // 178 (reposo típico) − 158
+const RETURN_BAND = 13; // 178 − 165
+// Ventanas en ms (EX-47): a 4.8 fps "3 frames" eran 620 ms y a 25 fps 120.
+const SMOOTH_MS = 400;
+const CONFIRM_MS = 200;
+
 const KNEE_STRAIGHT_ANGLE = 150;
 const TRUNK_LEAN_TOLERANCE = 0.14; // |hombro.x − cadera.x| normalizado
-const SMOOTH_WINDOW = 3;
-const PHASE_CONFIRM_FRAMES = 2;
 
 const LEVEL_HIP_ANGLE: Record<number, number> = { 1: 150, 2: 135, 3: 120 };
 
@@ -54,12 +57,6 @@ function activeLeg(lms: Landmark[]): Leg | null {
   return null;
 }
 
-const machine = createPhaseMachine({
-  standingEnter: STANDING_ENTER_HIP_ANGLE,
-  standingExit: STANDING_EXIT_HIP_ANGLE,
-  standingIs: "high",
-});
-
 const PHASE_FEEDBACK: Record<ValidatorPhase, string> = {
   standing: "Eleva una pierna estirada al frente",
   descending: "¡Bien! Sigue subiendo la pierna",
@@ -73,9 +70,11 @@ function buildValidator(level: number) {
     visibility: (lms) => (activeLeg(lms) ? null : "Ponte de perfil, que se vea de los hombros a los tobillos"),
     metric: (lms) => hipAngleOf(lms, activeLeg(lms) ?? LEFT),
     levelReached: (_lms, hip) => hip <= target,
-    machine,
-    smoothWindow: SMOOTH_WINDOW,
-    confirmFrames: PHASE_CONFIRM_FRAMES,
+    restIs: "high",
+    exitBand: EXIT_BAND,
+    returnBand: RETURN_BAND,
+    smoothMs: SMOOTH_MS,
+    confirmMs: CONFIRM_MS,
     formRules: (lms) => {
       const leg = activeLeg(lms) ?? LEFT;
       const knee = calcularAngulo(lms[leg.hip], lms[leg.knee], lms[leg.ankle]);

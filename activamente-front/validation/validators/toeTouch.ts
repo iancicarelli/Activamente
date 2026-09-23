@@ -33,16 +33,18 @@ import {
   RIGHT_WRIST,
   isTrackable,
 } from "../landmarkIndices";
-import { createPhaseMachine, createStabilizedValidator, Side, sidedValue, visibleSide } from "../stabilize";
+import { createStabilizedValidator, Side, sidedValue, visibleSide } from "../stabilize";
 
-const STANDING_ENTER_HIP_ANGLE = 155;
-const STANDING_EXIT_HIP_ANGLE = 148;
+// Bandas RELATIVAS al reposo (EX-46). Antes 155/148 absolutos: con el reposo real
+// en 153° (2026-09-22) perdía 11 de 16 flexiones por no "volver a estar de pie".
+const EXIT_BAND = 17; // 165 (reposo típico) − 148
+const RETURN_BAND = 10; // 165 − 155
+// Ventanas en ms (EX-47): a 4.8 fps "3 frames" eran 620 ms y a 25 fps 120.
+const SMOOTH_MS = 400;
+const CONFIRM_MS = 200;
+
 const HEAD_CHECK_HIP_ANGLE = 90;
 const BACK_ALIGN_TOLERANCE = 0.05;
-
-// El pipeline real corre a ~5-8 fps: ventanas cortas para que la rep no llegue tarde.
-const SMOOTH_WINDOW = 3;
-const PHASE_CONFIRM_FRAMES = 2;
 
 // Fracción del tramo rodilla→tobillo que deben alcanzar las muñecas por nivel.
 const LEVEL_DEPTH: Record<number, number> = { 1: 0, 2: 0.85 };
@@ -69,12 +71,6 @@ const depthReachedOn = (lms: Landmark[], p: Pts, depth: number) => {
   return lms[p.wrist].y >= target - WRIST_TOLERANCE;
 };
 
-const machine = createPhaseMachine({
-  standingEnter: STANDING_ENTER_HIP_ANGLE,
-  standingExit: STANDING_EXIT_HIP_ANGLE,
-  standingIs: "high",
-});
-
 const PHASE_FEEDBACK: Record<ValidatorPhase, string> = {
   standing: "Inclínate hacia adelante",
   descending: "¡Bien! Sigue bajando",
@@ -96,9 +92,11 @@ function buildValidator(level: number) {
       if (s === "both") return depthReachedOn(lms, LEFT, depth) || depthReachedOn(lms, RIGHT, depth);
       return depthReachedOn(lms, pts(s === "right" ? "right" : "left"), depth);
     },
-    machine,
-    smoothWindow: SMOOTH_WINDOW,
-    confirmFrames: PHASE_CONFIRM_FRAMES,
+    restIs: "high",
+    exitBand: EXIT_BAND,
+    returnBand: RETURN_BAND,
+    smoothMs: SMOOTH_MS,
+    confirmMs: CONFIRM_MS,
     formRules: (lms, _phase, hipAngle) => {
       const s = side(lms);
       if (s === "both" && distanciaY(lms[LEFT_SHOULDER], lms[RIGHT_SHOULDER]) > BACK_ALIGN_TOLERANCE) return "Mantén la espalda alineada";

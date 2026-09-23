@@ -6,9 +6,13 @@ import { BODY_INDICES } from "../../validation/landmarkIndices";
 import * as P from "./poseFactory";
 import { listFixtures, loadFixture } from "./fixtures";
 
+const FRAME_MS = 200;
+
 function run(exerciseId: string, level: number, frames: Landmark[][], state: ValidatorState = createValidatorState()) {
   const fn = exerciseRegistry[exerciseId].levels[level];
-  const results = frames.map((f) => fn(f, state));
+  // 5 fps simulados: las ventanas del motor son temporales (EX-47), así que los
+  // frames sintéticos necesitan un reloj.
+  const results = frames.map((f, i) => fn(f, state, i * FRAME_MS));
   return { reps: state.repCount, results, state };
 }
 
@@ -48,7 +52,7 @@ describe.each(cases)("$id nivel $level", ({ id, level, frame, edge }) => {
   });
 
   test("lista vacía de landmarks → ok:false con feedback", () => {
-    const r = exerciseRegistry[id].levels[level]([], createValidatorState());
+    const r = exerciseRegistry[id].levels[level]([], createValidatorState(), 0);
     expect(r.ok).toBe(false);
     expect(r.repCompleted).toBe(false);
   });
@@ -119,6 +123,110 @@ describe("reglas de forma", () => {
     const feedbacks = new Set(results.map((r) => r.feedback));
     expect(feedbacks.has("¡Repetición completada!")).toBe(true);
     expect(feedbacks.has("Baja flexionando las rodillas")).toBe(true);
+  });
+});
+
+describe("robustez del conteo (EX-45)", () => {
+  // A 4-5 fps una rep real dura 1-3 s; un pico de uno o dos frames es glitch de
+  // MediaPipe, no una repetición (improvements.md 11.6).
+  test("un pico de un solo frame no cuenta", () => {
+    const quieto = P.squat(178);
+    const pico = P.squat(80);
+    const frames = [...Array(10).fill(quieto), pico, ...Array(10).fill(quieto)];
+    expect(run("squat", 1, frames).reps).toBe(0);
+  });
+
+  // Un pico de DOS frames sí cuenta, y es una limitación conocida (EX-63): el
+  // suavizado de 400 ms los esparce en ~600 ms de señal, indistinguible de una
+  // rep rápida real. Subir el piso a 800 ms lo tapaba pero costaba reps de verdad
+  // (brazos 5 → 2). La defensa correcta es sanear la métrica, no alargar el piso.
+  test("un pico de dos frames todavía cuenta (limitación conocida, EX-63)", () => {
+    const quieto = P.squat(178);
+    const pico = P.squat(80);
+    const frames = [...Array(10).fill(quieto), pico, pico, ...Array(10).fill(quieto)];
+    expect(run("squat", 1, frames).reps).toBe(1);
+  });
+
+  test("una bajada sostenida sí cuenta", () => {
+    const frames = P.repSequence(1, (t) => P.squat(P.lerp(178, 80, t)));
+    expect(run("squat", 1, frames).reps).toBe(1);
+  });
+
+  test("el reposo por persona rescata a quien no estira del todo las piernas (EX-46)", () => {
+    // Reposo real 156°, no 175°: con el umbral absoluto viejo (vuelta sobre 160°)
+    // esto contaba 0. Es el caso del 1er intento del 2026-09-22.
+    const frames = P.repSequence(6, (t) => P.squat(P.lerp(156, 95, t)));
+    expect(run("squat", 1, frames).reps).toBe(6);
+  });
+});
+
+describe("leg_elevation (marcha en el lugar)", () => {
+  // Los niveles se miden como ESFUERZO sobre el reposo (≈ −0.80), no en valor
+  // absoluto: nivel 1 ≥ 0.40, nivel 2 ≥ 0.80.
+  const UP = 0.05; // rodilla a la altura de la cadera → esfuerzo ≈ 0.85
+  const march = (reps: number, first: "left" | "right" = "left") => P.marchSequence(reps, UP, first);
+
+  test("10 rodillas alternando → repCount === 10", () => {
+    expect(run("leg_elevation", 1, march(10)).reps).toBe(10);
+  });
+
+  test("con ruido de ±0.01 cuenta al menos 9 de 10 y nunca de más", () => {
+    const frames = march(10).map((f, i) => P.jitter(f, 0.01, i + 1));
+    const reps = run("leg_elevation", 1, frames).reps;
+    expect(reps).toBeGreaterThanOrEqual(9);
+    expect(reps).toBeLessThanOrEqual(10);
+  });
+
+  test("dos subidas seguidas de la MISMA pierna cuentan una sola", () => {
+    const same = [...P.repSequence(1, (t) => P.kneeRaise("left", P.lerp(-0.8, UP, t))), ...P.repSequence(1, (t) => P.kneeRaise("left", P.lerp(-0.8, UP, t)))];
+    const { reps, results } = run("leg_elevation", 1, same);
+    expect(reps).toBe(1);
+    expect(results.some((r) => r.feedback === "Ahora sube la otra rodilla")).toBe(true);
+  });
+
+  test("tras pedir cambio de pierna, la otra rodilla sí cuenta", () => {
+    const frames = [
+      ...P.repSequence(1, (t) => P.kneeRaise("left", P.lerp(-0.8, UP, t))),
+      ...P.repSequence(1, (t) => P.kneeRaise("left", P.lerp(-0.8, UP, t))), // repetida: no cuenta
+      ...P.repSequence(1, (t) => P.kneeRaise("right", P.lerp(-0.8, UP, t))),
+    ];
+    expect(run("leg_elevation", 1, frames).reps).toBe(2);
+  });
+
+  test("empezar por la derecha cuenta igual (no se asume pierna inicial)", () => {
+    expect(run("leg_elevation", 1, march(6, "right")).reps).toBe(6);
+  });
+
+  test("oscilar en el borde de 'standing' no cuenta (histéresis)", () => {
+    expect(run("leg_elevation", 1, P.marchSequence(10, -0.72)).reps).toBe(0);
+  });
+
+  test("sin visibilidad no avanza la fase ni cuenta", () => {
+    const frames = march(3).map((f) => P.invisible(f, BODY_INDICES));
+    const { reps, results, state } = run("leg_elevation", 1, frames);
+    expect(reps).toBe(0);
+    expect(state.phase).toBe("standing");
+    expect(results.every((r) => !r.ok && r.feedback)).toBe(true);
+  });
+
+  test("nivel 2 exige la rodilla a la altura de la cadera", () => {
+    const halfway = P.marchSequence(6, -0.3); // media altura → esfuerzo ≈ 0.50
+    expect(run("leg_elevation", 1, halfway).reps).toBe(6);
+    expect(run("leg_elevation", 2, halfway).reps).toBe(0);
+    expect(run("leg_elevation", 2, march(6)).reps).toBe(6);
+  });
+
+  test("no pide mantener la posición: en marcha el hold frena el ritmo (EX-58)", () => {
+    const { results } = run("leg_elevation", 1, march(2));
+    expect(results.some((r) => r.feedback === "¡Mantén la posición!")).toBe(false);
+    expect(results.some((r) => r.feedback === "¡Muy bien! Ahora la otra rodilla")).toBe(true);
+  });
+
+  test("la segunda sesión arranca limpia (no recuerda la última pierna)", () => {
+    const first = run("leg_elevation", 1, march(2));
+    expect(first.reps).toBe(2);
+    // Empieza de nuevo con la izquierda: si `extra` no se reseteara, la primera no contaría.
+    expect(run("leg_elevation", 1, march(2)).reps).toBe(2);
   });
 });
 

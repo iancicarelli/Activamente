@@ -32,4 +32,4 @@ ROUTINE_EXERCISE_SQUAT_ID = "869202d7-7b9e-4f38-82f6-11b0b959ee5e"
 SESSION_ID = "90a1aeee-c904-439f-ba34-1a3c9dfc2a41"
 SESSION_EXERCISE_ID = "6b75d303-0e53-442b-bd3a-330a30b5e366"
 
-EXERCISE_SLUGS = {"squat", "toe_touch", "leg_raise", "shoulder_raises"}
+EXERCISE_SLUGS = {"squat", "toe_touch", "leg_raise", "leg_elevation", "shoulder_raises"}
