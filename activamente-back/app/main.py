@@ -3,6 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from app.core.config import DOCS_ENABLED
 from app.core.middleware import RejectNulBytesMiddleware
 from app.database import get_db
 from app.routers import (
@@ -19,7 +20,14 @@ from app.routers import (
     users,
 )
 
-app = FastAPI(title="ActivaMente API", version="1.1.0")
+# Swagger solo con APP_ENV=dev (SEC-06): en la VPS no se publica el mapa de la API.
+app = FastAPI(
+    title="ActivaMente API",
+    version="1.1.0",
+    docs_url="/docs" if DOCS_ENABLED else None,
+    redoc_url="/redoc" if DOCS_ENABLED else None,
+    openapi_url="/openapi.json" if DOCS_ENABLED else None,
+)
 
 # Bytes NUL en path/query/body → 422 antes de llegar a Postgres (si no, 500).
 app.add_middleware(RejectNulBytesMiddleware)
@@ -52,7 +60,10 @@ for router in (
 
 @app.get("/", tags=["health"])
 def root():
-    return {"name": "ActivaMente API", "docs": "/docs", "health": "/health"}
+    info = {"name": "ActivaMente API", "health": "/health"}
+    if DOCS_ENABLED:
+        info["docs"] = "/docs"
+    return info
 
 
 @app.get("/health", tags=["health"])

@@ -7,12 +7,16 @@ from tests import seed_data
 def test_health_hits_real_database(live):
     r = live.get("/health")
     assert r.status_code == 200 and r.json() == {"status": "ok"}
-    assert live.get("/").json()["docs"] == "/docs"
 
 
-def test_docs_and_openapi_served(live):
-    assert live.get("/docs").status_code == 200
-    assert "/api/auth/login" in live.get("/openapi.json").json()["paths"]
+def test_docs_match_environment(live):
+    """Con APP_ENV=dev Swagger está publicado; en staging/prod (SEC-06) no existe."""
+    if "docs" in live.get("/").json():
+        assert live.get("/docs").status_code == 200
+        assert "/api/auth/login" in live.get("/openapi.json").json()["paths"]
+    else:
+        for path in ("/docs", "/redoc", "/openapi.json"):
+            assert live.get(path).status_code == 404, path
 
 
 def test_seed_users_can_login_and_load_home(live, live_login):

@@ -9,6 +9,13 @@ from datetime import UTC, date, datetime
 from zoneinfo import ZoneInfo
 
 APP_TIMEZONE = os.getenv("APP_TIMEZONE", "America/Santiago")
+
+# Ambiente (SEC-06): dev | staging | prod. Sin definir o con un valor desconocido cuenta como
+# prod, que es lo seguro: olvidar la variable en la VPS no debe dejar Swagger público.
+APP_ENV = os.getenv("APP_ENV", "prod").strip().lower()
+# /docs, /redoc y /openapi.json solo en desarrollo local. Staging también es público en internet
+# y corre el mismo código que prod, así que tampoco los expone.
+DOCS_ENABLED = APP_ENV == "dev"
 LOCAL_TZ = ZoneInfo(APP_TIMEZONE)
 
 

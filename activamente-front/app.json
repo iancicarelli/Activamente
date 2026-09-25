@@ -21,7 +21,13 @@
       },
       "edgeToEdgeEnabled": true,
       "predictiveBackGestureEnabled": false,
-      "package": "com.activamente.app"
+      "package": "com.activamente.app",
+      "blockedPermissions": [
+        "android.permission.RECORD_AUDIO",
+        "android.permission.READ_EXTERNAL_STORAGE",
+        "android.permission.WRITE_EXTERNAL_STORAGE",
+        "android.permission.SYSTEM_ALERT_WINDOW"
+      ]
     },
     "web": {
       "output": "static",
@@ -46,7 +52,8 @@
       [
         "react-native-vision-camera",
         {
-          "cameraPermissionText": "ActivaMente necesita la cámara para evaluar los ejercicios en tiempo real."
+          "cameraPermissionText": "ActivaMente necesita la cámara para evaluar los ejercicios en tiempo real.",
+          "enableMicrophonePermission": false
         }
       ],
       "expo-secure-store"

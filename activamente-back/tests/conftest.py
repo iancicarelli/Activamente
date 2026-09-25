@@ -22,6 +22,8 @@ import pytest
 
 # SECRET_KEY y DATABASE_URL deben existir ANTES de importar la app.
 os.environ.setdefault("SECRET_KEY", "test-secret-key-not-for-prod")
+# La suite prueba la app de desarrollo (con Swagger); prod se prueba aparte (tests/unit/test_docs_env.py).
+os.environ.setdefault("APP_ENV", "dev")
 
 DB_DIR = Path(__file__).resolve().parent.parent / "database"
 
