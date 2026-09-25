@@ -110,8 +110,11 @@ android {
             signingConfig signingConfigs.debug
         }
         release {
-            // Caution! In production, you need to generate your own keystore file.
-            // see https://reactnative.dev/docs/signed-apk-android.
+            // SEC-15: el release que va a Play lo compila y firma EAS Build (`eas build --profile
+            // production`) con la clave de subida guardada en EAS; al compilar, EAS reemplaza este
+            // signingConfig. En local (`expo run:android --variant release`) queda firmado con la
+            // clave de DEBUG: sirve para probar en un teléfono, pero Play lo rechaza. Nunca subir a
+            // Play un AAB compilado en local. La firma final la hace Google (Play App Signing).
             signingConfig signingConfigs.debug
             def enableShrinkResources = findProperty('android.enableShrinkResourcesInReleaseBuilds') ?: 'false'
             shrinkResources enableShrinkResources.toBoolean()
@@ -119,6 +122,12 @@ android {
             proguardFiles getDefaultProguardFile("proguard-android.txt"), "proguard-rules.pro"
             def enablePngCrunchInRelease = findProperty('android.enablePngCrunchInReleaseBuilds') ?: 'true'
             crunchPngs enablePngCrunchInRelease.toBoolean()
+        }
+    }
+    // Aviso si alguien arma el AAB de Play fuera de EAS (EAS_BUILD lo define el builder de EAS).
+    gradle.taskGraph.whenReady { graph ->
+        if (System.getenv('EAS_BUILD') == null && graph.allTasks.any { it.name == 'bundleRelease' }) {
+            logger.warn("AVISO (SEC-15): bundleRelease local queda firmado con la clave de DEBUG y Play lo rechaza. Usa `eas build --profile production`.")
         }
     }
     packagingOptions {

@@ -14,3 +14,10 @@ android/app/.cxx/
 
 # Logs de ejercicio bajados del dispositivo (scripts/pull-logs.sh)
 validation/__logs__/
+
+# Credenciales de publicación (SEC-15): la clave de subida vive en EAS, nunca en git.
+google-service-account*.json
+credentials.json
+*.jks
+*.keystore
+!android/app/debug.keystore
