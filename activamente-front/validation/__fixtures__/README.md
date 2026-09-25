@@ -33,3 +33,16 @@ antes de decidir qué convertir en fixture.
 | `shoulder_raises_2026-09-17_mesa.json` | 190 | 4 | de frente; contó 4 en el teléfono |
 | `squat_2026-09-17_perfil_mesa.json` | 220 | 7 | de perfil; tobillo cercano en el borde inferior. El teléfono contó 4 (persona estimó 5-6; el replay muestra 7 bajadas a < 90°) |
 | `toe_touch_2026-09-17_frente_mesa.json` | 180 | 6 | de frente, algo girado (lado izquierdo poco visible). El teléfono contó 4 (persona estimó ~7) |
+
+## Fixtures reales (2026-09-25, Samsung A32, en vivo con los niveles de EX-50, nivel 1)
+
+La persona hizo cada ejercicio bien, contando en voz alta; el teléfono y el replay cuadraron exacto.
+
+| Archivo | Frames activos | expectedReps | Nota |
+| --- | --- | --- | --- |
+| `squat_2026-09-25_vivo.json` | 120 | 5 | rodilla mín 66-78° (nivel 1 ≤ 125°) |
+| `toe_touch_2026-09-25_vivo.json` | 114 | 5 | cadera mín 65-83° |
+| `shoulder_raises_2026-09-25_vivo.json` | 140 | 5 | brazo máx 157-168°, sin frames perdidos por encuadre |
+| `leg_elevation_2026-09-25_vivo.json` | 128 | 8 | rodillas alternadas D-I ×4, esfuerzo pico 0.63-1.02 |
+
+El test usa el `t` real de cada frame (las ventanas del motor son en ms, EX-47), no un reloj sintético.

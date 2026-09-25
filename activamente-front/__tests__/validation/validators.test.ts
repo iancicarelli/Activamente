@@ -8,11 +8,11 @@ import { listFixtures, loadFixture } from "./fixtures";
 
 const FRAME_MS = 200;
 
-function run(exerciseId: string, level: number, frames: Landmark[][], state: ValidatorState = createValidatorState()) {
+function run(exerciseId: string, level: number, frames: Landmark[][], state: ValidatorState = createValidatorState(), times?: number[]) {
   const fn = exerciseRegistry[exerciseId].levels[level];
   // 5 fps simulados: las ventanas del motor son temporales (EX-47), así que los
-  // frames sintéticos necesitan un reloj.
-  const results = frames.map((f, i) => fn(f, state, i * FRAME_MS));
+  // frames sintéticos necesitan un reloj. Los fixtures reales traen el suyo.
+  const results = frames.map((f, i) => fn(f, state, times?.[i] ?? i * FRAME_MS));
   return { reps: state.repCount, results, state };
 }
 
@@ -238,7 +238,9 @@ describe("fixtures reales", () => {
   }
   test.each(fixtures)("%s cuenta las reps esperadas", (name) => {
     const { meta, frames } = loadFixture(name);
-    const { reps } = run(meta.exerciseId, meta.level ?? 1, frames);
+    // Reloj real del teléfono: a 4-5 fps los frames no llegan parejos (EX-47).
+    const times = meta.frames.map((f) => f.t);
+    const { reps } = run(meta.exerciseId, meta.level ?? 1, frames, createValidatorState(), times);
     if (meta.expectedReps != null) expect(reps).toBe(meta.expectedReps);
     else expect(reps).toBeGreaterThanOrEqual(0);
   });
