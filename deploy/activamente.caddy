@@ -1,0 +1,16 @@
+# Sitios de ActivaMente para el Caddy compartido de la VPS (repo vps-proxy).
+# Instalar: copiar a /srv/proxy/sites/ (o symlink), reemplazar DOMINIO, luego
+#   docker compose exec -w /etc/caddy caddy caddy validate && docker compose exec -w /etc/caddy caddy caddy reload
+# Los alias son PROXY_ALIAS de cada ambiente (ver activamente-back/CLAUDE.md "Despliegue").
+
+# Producción (rama main)
+api.DOMINIO {
+	encode zstd gzip
+	reverse_proxy activamente-api:8420
+}
+
+# Staging (rama develop)
+api-dev.DOMINIO {
+	encode zstd gzip
+	reverse_proxy activamente-api-dev:8420
+}

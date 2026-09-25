@@ -2,7 +2,8 @@
 -- El texto describía un ejercicio DE PIE ("Párate erguido... eleva una pierna estirada hacia el
 -- frente"), pero el ejercicio —y su video— son ACOSTADO boca arriba. El paciente leía una cosa y
 -- el video mostraba otra. Solo texto: el validador sigue en beta y sin calibrar.
---   docker exec -i activamente-db psql -U activamente -d activamente_db < database/migrations/003_leg_raise_text.sql
+--   (desde la raíz del repo; en la VPS agregar -f docker-compose.yml)
+--   docker compose exec -T db sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB"' < activamente-back/database/migrations/003_leg_raise_text.sql
 -- Idempotente: se puede correr dos veces sin efecto.
 BEGIN;
 

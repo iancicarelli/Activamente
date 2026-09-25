@@ -1,9 +1,25 @@
+# Compose de PRODUCCIÓN / STAGING (VPS). En la VPS se usa SOLO este archivo:
+#   docker compose -f docker-compose.yml up -d --build
+# En local, `docker compose up` le suma docker-compose.override.yml (puertos 8420/55432 + seed)
+# y no necesita la red `proxy`.
+#
+# Sin container_name a propósito: prod y dev corren en la misma VPS con este mismo archivo y
+# se separan por COMPOSE_PROJECT_NAME (activamente-prod / activamente-dev, en cada .env). Cada
+# proyecto tiene sus propios contenedores, red interna y volumen de base.
+# Nada publica puertos: desde internet solo se llega por Caddy (repo de infra de la VPS), que
+# encuentra al backend por su alias en la red `proxy`.
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"   # sin tope, los logs de Docker llenan el disco de la VPS
+    max-file: "3"
+
 services:
   db:
     build:
       context: ./activamente-back
       dockerfile: Dockerfile.db
-    container_name: activamente-db
     restart: unless-stopped
     env_file: .env
     environment:
@@ -12,18 +28,37 @@ services:
       POSTGRES_DB: ${POSTGRES_DB}
     volumes:
       - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    logging: *logging
 
   backend:
     build: ./activamente-back
-    container_name: activamente-back
     restart: unless-stopped
     env_file: .env
     environment:
       DATABASE_URL: ${DATABASE_URL}
-    ports:
-      - "8420:8420"
+      # uvicorn solo acepta X-Forwarded-For desde aquí (Caddy); ver SEC-05 en .env.example.
+      FORWARDED_ALLOW_IPS: ${FORWARDED_ALLOW_IPS:-127.0.0.1}
     depends_on:
-      - db
+      db:
+        condition: service_healthy
+    networks:
+      default:
+      proxy:
+        # Nombre con el que Caddy encuentra ESTE ambiente. Debe ser único en toda la VPS
+        # (activamente-api en prod, activamente-api-dev en dev): si dos ambientes compartieran
+        # alias, Caddy repartiría las peticiones de producción entre los dos.
+        aliases: ["${PROXY_ALIAS:?define PROXY_ALIAS en .env (ver .env.example)}"]
+    logging: *logging
+
+networks:
+  # La crea el repo de infra de la VPS (Caddy). Si no existe, `up` falla: levantar primero el proxy.
+  proxy:
+    external: true
 
 volumes:
   postgres_data:

@@ -1,7 +1,8 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.orm import Session
 
 from app.core.deps import get_current_user
+from app.core.rate_limit import login_limiter
 from app.core.rut import normalize_rut, rut_column_normalized
 from app.core.security import create_access_token, hash_password, verify_password
 from app.database import get_db
@@ -13,6 +14,14 @@ from app.schemas.auth_schema import ChangePasswordRequest, LoginRequest, TokenRe
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
 INVALID_CREDENTIALS = "El usuario o la contraseña no son correctos. Si olvidaste tu contraseña, pide ayuda a tu especialista."
+
+
+def _account_key(body: LoginRequest) -> str:
+    """Identificador de la cuenta para el límite de intentos (SEC-05), normalizado para que
+    `Pedro@x.cl` y `pedro@x.cl`, o `9.876.543-2` y `98765432`, cuenten como la misma."""
+    if body.email:
+        return "email:" + body.email.strip().lower()
+    return "rut:" + (normalize_rut(body.rut) or "")
 
 
 def _find_user(db: Session, body: LoginRequest) -> User | None:
@@ -33,13 +42,27 @@ def _find_user(db: Session, body: LoginRequest) -> User | None:
 
 
 @router.post("/login", response_model=TokenResponse)
-def login(body: LoginRequest, db: Session = Depends(get_db)):
+def login(body: LoginRequest, request: Request, db: Session = Depends(get_db)):
     """Login por `email` o por `rut` + `password`. El perfil se obtiene después
-    con GET /api/me (EP-14)."""
+    con GET /api/me (EP-14). Con demasiados fallos recientes responde 429 (SEC-05)
+    antes de mirar la contraseña, aunque esta sea correcta."""
+    ip = request.client.host if request.client else "unknown"
+    account = _account_key(body)
+    wait = login_limiter.retry_after(ip, account)
+    if wait:
+        minutes = (wait + 59) // 60
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=f"Demasiados intentos fallidos. Espera {minutes} {'minuto' if minutes == 1 else 'minutos'} e inténtalo de nuevo.",
+            headers={"Retry-After": str(wait)},
+        )
+
     user = _find_user(db, body)
 
     if not user or not verify_password(body.password, user.password_hash):
+        login_limiter.record_failure(ip, account)
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=INVALID_CREDENTIALS)
+    login_limiter.reset(ip, account)
 
     # Cuenta desactivada: credenciales válidas pero sin acceso. 403 para que el
     # front lo distinga del 401 de credenciales.

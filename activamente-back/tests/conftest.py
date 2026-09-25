@@ -42,6 +42,7 @@ from fastapi.testclient import TestClient  # noqa: E402
 from sqlalchemy import create_engine  # noqa: E402
 from sqlalchemy.orm import Session  # noqa: E402
 
+from app.core.rate_limit import login_limiter  # noqa: E402
 from app.core.security import create_access_token  # noqa: E402
 from app.database import get_db  # noqa: E402
 from app.main import app  # noqa: E402
@@ -103,6 +104,14 @@ def db(engine):
         session.close()
         outer.rollback()
         connection.close()
+
+
+@pytest.fixture(autouse=True)
+def _reset_login_limiter():
+    """El límite de login (SEC-05) es global en memoria: cada test empieza sin fallos previos."""
+    login_limiter.clear()
+    yield
+    login_limiter.clear()
 
 
 @pytest.fixture

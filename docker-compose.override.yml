@@ -7,3 +7,13 @@ services:
     volumes:
       # Datos falsos de prueba (SEC-13): solo corren al crear una base nueva.
       - ./activamente-back/database/seed.sql:/docker-entrypoint-initdb.d/03_seed.sql:ro
+
+  backend:
+    # En local la app del teléfono llama directo a http://<IP del PC>:8420, sin Caddy.
+    ports:
+      - "8420:8420"
+    networks: !override
+      default:
+
+networks:
+  proxy: !reset {}

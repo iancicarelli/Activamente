@@ -1,6 +1,7 @@
 -- 2026-09-17 · routines.day_of_week (INT) → days_of_week (INT[]): varios días por rutina.
 -- Para bases creadas antes de este cambio (las nuevas ya salen de init.sql):
---   docker exec -i activamente-db psql -U activamente -d activamente_db < database/migrations/001_routines_days_of_week.sql
+--   (desde la raíz del repo; en la VPS agregar -f docker-compose.yml)
+--   docker compose exec -T db sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB"' < activamente-back/database/migrations/001_routines_days_of_week.sql
 BEGIN;
 
 ALTER TABLE routines ADD COLUMN days_of_week INT[];
