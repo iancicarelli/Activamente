@@ -32,6 +32,6 @@ case "$layer" in
     python3 -m pytest -m "e2e" -q "$@"
     python3 -m pytest -m "security" -q "$@"
     echo "== cobertura (todo junto) =="; python3 -m pytest -q --cov=app --cov-report=term-missing:skip-covered "$@" | tail -25 ;;
-  lint) ruff check app tests && ruff format --check app tests ;;
+  lint) ruff check app tests scripts && ruff format --check app tests scripts ;;
   *) echo "capa desconocida: $layer (smoke|unit|integration|e2e|security|live|audit|all|lint)"; exit 2 ;;
 esac

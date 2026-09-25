@@ -6,7 +6,7 @@ Cómo correr:
   2. pip install -r requirements-dev.txt
   3. cd activamente-back && TEST_DB_PORT=55432 pytest
 
-La suite crea una base LIMPIA `activamente_test`, corre init.sql + seed.sql una
+La suite crea una base LIMPIA `activamente_test`, corre init.sql + catalog.sql + seed.sql una
 vez por sesión, y cada test corre dentro de una transacción externa que se hace
 ROLLBACK al final: los `db.commit()` de la app solo liberan un SAVEPOINT
 (`join_transaction_mode="create_savepoint"`), así ningún test ve lo que
@@ -70,8 +70,9 @@ def _setup_test_database():
 
     conn = psycopg2.connect(f"dbname={TEST_DB_NAME} user={DB_USER} password={DB_PASSWORD} host={DB_HOST} port={DB_PORT}")
     conn.autocommit = True
-    _run_sql_file(conn, DB_DIR / "init.sql")
-    _run_sql_file(conn, DB_DIR / "seed.sql")
+    # Mismo orden que docker-entrypoint-initdb.d: esquema → catálogo → datos falsos.
+    for name in ("init.sql", "catalog.sql", "seed.sql"):
+        _run_sql_file(conn, DB_DIR / name)
     conn.close()
 
     yield

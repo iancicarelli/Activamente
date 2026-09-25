@@ -61,7 +61,7 @@ curl http://localhost:8420/health     # {"status":"ok"}
 
 Swagger para explorar la API: <http://localhost:8420/docs>.
 
-Para recrear la base de datos desde cero (vuelve a correr `init.sql` + `seed.sql`):
+Para recrear la base de datos desde cero (vuelve a correr `init.sql` + `catalog.sql` + `seed.sql`; el seed de prueba solo se carga en local, vía `docker-compose.override.yml`):
 
 ```bash
 docker compose down -v && docker compose up --build

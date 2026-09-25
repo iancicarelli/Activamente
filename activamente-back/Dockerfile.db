@@ -1,4 +1,6 @@
 FROM postgres:16
 
+# Solo lo que va a TODOS los ambientes: esquema + catálogo de ejercicios (SEC-13).
+# seed.sql (usuarios falsos) NO se copia: en local lo monta docker-compose.override.yml.
 COPY ./database/init.sql /docker-entrypoint-initdb.d/01_init.sql
-COPY ./database/seed.sql /docker-entrypoint-initdb.d/02_seed.sql
+COPY ./database/catalog.sql /docker-entrypoint-initdb.d/02_catalog.sql

@@ -1,4 +1,9 @@
+# Solo desarrollo local: `docker compose up` lo aplica solo. NO copiarlo a la VPS
+# (en producción se usa `docker compose -f docker-compose.yml ...`).
 services:
   db:
     ports: !override
       - "55432:5432"
+    volumes:
+      # Datos falsos de prueba (SEC-13): solo corren al crear una base nueva.
+      - ./activamente-back/database/seed.sql:/docker-entrypoint-initdb.d/03_seed.sql:ro
