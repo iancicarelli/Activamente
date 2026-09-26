@@ -6,7 +6,7 @@
 #   integration  endpoint por endpoint contra Postgres (tests/test_*.py)
 #   e2e          flujos completos por rol con login real
 #   security     JWT, IDOR, inyección, mass assignment, hardening
-#   live         contra un servidor real: LIVE_API_URL=http://localhost:8420 scripts/test.sh live
+#   live         contra un servidor real, sin seed: LIVE_API_URL=... [LIVE_EMAIL/LIVE_RUT + LIVE_PASSWORD] scripts/test.sh live
 #   audit        bandit (código) + pip-audit (dependencias Python) + npm audit (frontend, prod)
 #   all          smoke → unit → integration → e2e → security, con cobertura
 #   lint         ruff check + ruff format --check

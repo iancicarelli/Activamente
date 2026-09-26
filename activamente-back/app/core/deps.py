@@ -5,16 +5,23 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.orm import Session
 
 from app.core.security import decode_token
+from app.core.terms import TERMS_VERSION
 from app.database import get_db
+from app.models.terms_acceptance_model import TermsAcceptance
 from app.models.user_model import User, UserRole
 
 security = HTTPBearer()
 
 
-def get_current_user(
+TERMS_REQUIRED = "Debes aceptar los términos de uso para continuar."
+
+
+def get_current_user_pending_terms(
     credentials: HTTPAuthorizationCredentials = Depends(security),
     db: Session = Depends(get_db),
 ) -> User:
+    """Usuario autenticado y activo, haya aceptado o no los términos vigentes. Solo para las
+    rutas que se necesitan ANTES de aceptarlos (leerlos, aceptarlos, cambiar la clave)."""
     payload = decode_token(credentials.credentials)
     if not payload:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Tu sesión expiró. Vuelve a ingresar.")
@@ -35,6 +42,23 @@ def get_current_user(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Cuenta desactivada. Contacta a un administrador.",
         )
+    return user
+
+
+def get_current_user(
+    user: User = Depends(get_current_user_pending_terms),
+    db: Session = Depends(get_db),
+) -> User:
+    """Usuario autenticado, activo y con los términos VIGENTES aceptados (Ley 21.719: sin
+    consentimiento no se tratan sus datos). Si no, 403 con la cabecera `X-Terms-Required`, que la
+    app usa para llevarlo a la pantalla de términos."""
+    accepted = (
+        db.query(TermsAcceptance.user_id)
+        .filter(TermsAcceptance.user_id == user.id, TermsAcceptance.version == TERMS_VERSION)
+        .first()
+    )
+    if accepted is None:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=TERMS_REQUIRED, headers={"X-Terms-Required": "1"})
     return user
 
 

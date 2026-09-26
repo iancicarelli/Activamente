@@ -6,6 +6,7 @@ import type { UserRole } from "../services/authStore";
 
 export const routes = {
   login: "/",
+  terms: "/terms",
 
   // Paciente
   patientHome: "/patient/(tabs)/home",

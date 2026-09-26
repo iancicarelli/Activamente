@@ -3,6 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from app.core.audit import AuditContextMiddleware
 from app.core.config import DOCS_ENABLED
 from app.core.middleware import RejectNulBytesMiddleware
 from app.database import get_db
@@ -13,6 +14,7 @@ from app.routers import (
     exercises_library,
     me,
     patients,
+    privacy,
     routines,
     sessions,
     specialists,
@@ -31,6 +33,8 @@ app = FastAPI(
 
 # Bytes NUL en path/query/body → 422 antes de llegar a Postgres (si no, 500).
 app.add_middleware(RejectNulBytesMiddleware)
+# Ruta y método del request para el registro de accesos (app/core/audit.py).
+app.add_middleware(AuditContextMiddleware)
 
 # allow_origins=["*"] con allow_credentials=True es una combinación inválida para
 # navegadores (HC-14). La app móvil no usa cookies, así que credentials=False.
@@ -54,6 +58,7 @@ for router in (
     sessions.router,
     surveys.router,
     appointments.router,
+    privacy.router,
 ):
     app.include_router(router)
 

@@ -15,7 +15,7 @@ Todo dentro de la transacción del test: no deja rastro en la base.
 from datetime import timedelta
 
 from app.core.config import today_local
-from tests.helpers import auth, create_user, real_login, routine_body
+from tests.helpers import accept_terms, auth, create_user, real_login, routine_body
 
 
 def test_full_patient_journey(client, admin_headers):
@@ -47,6 +47,7 @@ def test_full_patient_journey(client, admin_headers):
         client.post("/api/auth/login", json={"email": "laura.e2e@test.com", "password": spec["temp_password"]}).status_code == 401
     )
     spec_h = auth(real_login(client, email="laura.e2e@test.com", password="LauraNueva1!"))
+    accept_terms(client, spec_h)
     assert client.get("/api/specialists/me", headers=spec_h).json()["specialty"] == "Kinesiología"
 
     # Sin pacientes todavía: dashboard vacío, lista vacía.
@@ -73,6 +74,7 @@ def test_full_patient_journey(client, admin_headers):
     ptok = real_login(client, rut="6.123.456-K", password=pat["temp_password"])
     assert ptok["role"] == "PATIENT" and ptok["expires_in"] == 12 * 3600
     pat_h = auth(ptok)
+    accept_terms(client, pat_h)
     me = client.get("/api/me", headers=pat_h).json()
     assert me["role"] == "PATIENT"
     assert [s["email"] for s in me["patient"]["specialists"]] == ["laura.e2e@test.com"]

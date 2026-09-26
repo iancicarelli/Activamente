@@ -2,7 +2,7 @@
 → bloqueo (login 403 y token vivo muere) → reactivación → clave nueva → entra."""
 
 from tests.conftest import bearer
-from tests.helpers import auth, create_user, real_login
+from tests.helpers import accept_terms, auth, create_user, real_login
 
 
 def test_account_lifecycle(client, admin_headers):
@@ -44,6 +44,10 @@ def test_account_lifecycle(client, admin_headers):
 
     # Entra con el email nuevo y la clave temporal.
     tok = real_login(client, email="cvega.e2e@test.com", password=temp)
+    # Primer ingreso: sin aceptar los términos la API no le sirve (403 + X-Terms-Required).
+    r = client.get("/api/me", headers=auth(tok))
+    assert r.status_code == 403 and r.headers["X-Terms-Required"] == "1"
+    accept_terms(client, auth(tok))
     assert client.get("/api/me", headers=auth(tok)).status_code == 200
 
     # Bloqueo: login 403 y el token vivo deja de servir.

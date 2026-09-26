@@ -9,6 +9,7 @@ import { Screen, Banner, Card, Button, Field, InlineError } from "../components/
 import { Colors, Fonts, FontSize } from "../constants/theme";
 import { HOME_BY_ROLE } from "../router/routes";
 import { loginApi } from "../services/authService";
+import { refreshTermsStatus } from "../services/privacyService";
 import { ApiError } from "../services/apiClient";
 import { getErrorMessage } from "../utils/errors";
 import { formatRut, looksLikeRut } from "../utils/rut";
@@ -41,7 +42,9 @@ export default function LoginScreen() {
     setError(null);
     try {
       const { role } = await loginApi(identifier, password);
-      router.replace(HOME_BY_ROLE[role]);
+      // Primer ingreso (o términos nuevos): antes de su inicio, la pantalla de términos.
+      const accepted = await refreshTermsStatus().catch(() => true);
+      router.replace(accepted ? HOME_BY_ROLE[role] : "/terms");
     } catch (e) {
       if (e instanceof ApiError && e.status === 401) {
         setError("El usuario o la contraseña no son correctos. Si olvidaste tu contraseña, pide ayuda a tu especialista.");

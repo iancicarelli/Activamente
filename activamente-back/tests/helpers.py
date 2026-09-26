@@ -32,6 +32,14 @@ def auth(token_json: dict) -> dict:
     return {"Authorization": f"Bearer {token_json['access_token']}"}
 
 
+def accept_terms(client, headers: dict) -> None:
+    """Lo que hace la app en el primer ingreso: leer los términos vigentes y aceptarlos."""
+    terms = client.get("/api/me/terms", headers=headers)
+    assert terms.status_code == 200, terms.text
+    r = client.post("/api/me/terms", json={"version": terms.json()["version"]}, headers=headers)
+    assert r.status_code == 204, r.text
+
+
 def routine_body(patient_id: str, *, name: str = "Rutina e2e", days: int = 30, exercises=None) -> dict:
     """Rutina vigente desde hoy, todos los días, con dos ejercicios por defecto."""
     today = today_local()

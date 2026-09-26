@@ -146,3 +146,16 @@ INSERT INTO session_exercises (id, session_id, exercise_id, routine_exercise_id,
    0,
    NULL,
    NULL);
+
+-- =====================
+-- TERMS_ACCEPTANCES
+-- =====================
+-- Los usuarios de prueba ya aceptaron los términos vigentes, para que la app y los tests no
+-- pasen por la pantalla de términos. La versión debe coincidir con app/core/terms.py
+-- (TERMS_VERSION) y tests/seed_data.py; tests/unit/test_terms_seed.py lo verifica.
+INSERT INTO terms_acceptances (user_id, version) VALUES
+  ('e2b1cc5c-ab6f-47de-86d3-f4eba9db6b93', '2026-09-25'),
+  ('ba80b312-b4e8-4800-bf46-8c8d84f5052a', '2026-09-25'),
+  ('5d1f0a7e-3c2b-4e9a-8f6d-1b2c3d4e5f60', '2026-09-25'),
+  ('90bcc710-3984-4f86-8570-772ac433d7cd', '2026-09-25'),
+  ('7c0f3d2a-1b44-4e58-9a31-2f6c8e0a9b12', '2026-09-25');

@@ -1,5 +1,6 @@
 import { apiFetch, ApiError } from "../../services/apiClient";
 import { __resetAuthForTests, getSession, setAuth, subscribe } from "../../services/authStore";
+import { isTermsPending, setTermsPending } from "../../services/termsStore";
 
 const ok = (body: unknown, status = 200) => ({ ok: status < 400, status, text: async () => JSON.stringify(body) });
 
@@ -61,5 +62,20 @@ describe("apiFetch", () => {
   test("sin red → ApiError status 0 con mensaje humano", async () => {
     (fetch as jest.Mock).mockRejectedValue(new TypeError("Network request failed"));
     await expect(apiFetch("/api/me")).rejects.toMatchObject({ status: 0, message: expect.stringContaining("Sin conexión") });
+  });
+
+  test("403 con X-Terms-Required marca los términos como pendientes (el layout lleva a /terms)", async () => {
+    setTermsPending(false);
+    setAuth({ token: "tok", role: "PATIENT", userId: "u1", expiresAt: Date.now() + 10_000 });
+    (fetch as jest.Mock).mockResolvedValue({
+      ok: false,
+      status: 403,
+      text: async () => JSON.stringify({ detail: "Debes aceptar los términos de uso para continuar." }),
+      headers: { get: (h: string) => (h === "X-Terms-Required" ? "1" : null) },
+    });
+    await expect(apiFetch("/api/me")).rejects.toMatchObject({ status: 403 });
+    expect(isTermsPending()).toBe(true);
+    expect(getSession()).not.toBeNull(); // no cierra la sesión
+    setTermsPending(false);
   });
 });

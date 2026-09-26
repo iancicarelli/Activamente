@@ -33,3 +33,4 @@ SESSION_ID = "90a1aeee-c904-439f-ba34-1a3c9dfc2a41"
 SESSION_EXERCISE_ID = "6b75d303-0e53-442b-bd3a-330a30b5e366"
 
 EXERCISE_SLUGS = {"squat", "toe_touch", "leg_raise", "leg_elevation", "shoulder_raises"}
+TERMS_VERSION = "2026-09-25"  # = app/core/terms.py y las aceptaciones de seed.sql

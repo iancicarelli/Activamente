@@ -3,6 +3,7 @@ con búsqueda/rol/paginación, editar, activar/desactivar, perfiles /me."""
 
 from tests import seed_data
 from tests.conftest import login
+from tests.helpers import accept_terms
 
 
 def _create(client, admin_headers, **overrides):
@@ -48,6 +49,7 @@ def test_create_specialist_creates_row(client, admin_headers):
     r = _create(client, admin_headers, email="kine@test.com", role="especialista", rut="17.111.111-0", specialty="Kinesiología")
     assert r.status_code == 201, r.text
     token = login(client, email="kine@test.com", password=r.json()["temp_password"])["access_token"]
+    accept_terms(client, {"Authorization": f"Bearer {token}"})
     me = client.get("/api/specialists/me", headers={"Authorization": f"Bearer {token}"}).json()
     assert me["specialty"] == "Kinesiología"
     assert me["rut"] == "17111111-0"

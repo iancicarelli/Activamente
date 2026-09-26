@@ -4,6 +4,8 @@
 //   * guard de auth/rol: sin sesión → login; con sesión → home de su rol,
 //   * al expirar el token (401) o desactivarse la cuenta (403) redirige al
 //     login con el motivo (UX-03 / EP-07),
+//   * sin los términos vigentes aceptados (Ley 21.719) solo deja estar en /terms;
+//     /terms también se puede abrir a propósito para releerlos,
 //   * GestureHandlerRootView + SafeAreaProvider + ToastProvider globales.
 
 import React, { useEffect, useState } from "react";
@@ -16,6 +18,8 @@ import { SafeAreaProvider } from "react-native-safe-area-context";
 import { ToastProvider } from "../components/ui/Toast";
 import { HOME_BY_ROLE, SEGMENT_BY_ROLE } from "../router/routes";
 import { AuthSession, ClearReason, getSession, hydrateAuth, subscribe } from "../services/authStore";
+import { refreshTermsStatus } from "../services/privacyService";
+import { isTermsPending, setTermsPending, subscribeTerms } from "../services/termsStore";
 
 void SplashScreen.preventAutoHideAsync().catch(() => {});
 
@@ -27,18 +31,30 @@ export default function RootLayout() {
   const [authReady, setAuthReady] = useState(false);
   const [session, setSession] = useState<AuthSession | null>(getSession());
   const [clearReason, setClearReason] = useState<ClearReason | null>(null);
+  const [termsPending, setTermsPendingState] = useState(isTermsPending());
 
   const segments = useSegments();
   const router = useRouter();
 
   useEffect(() => {
     hydrateAuth()
-      .then((s) => setSession(s))
+      .then(async (s) => {
+        // Sesión restaurada: antes de mostrar nada, saber si le faltan los términos. Si falla la
+        // red, sigue igual: el primer 403 con X-Terms-Required lo corrige.
+        if (s) await refreshTermsStatus().catch(() => {});
+        setSession(s);
+      })
       .finally(() => setAuthReady(true));
-    return subscribe((s, reason) => {
+    const unsubscribeTerms = subscribeTerms(setTermsPendingState);
+    const unsubscribeAuth = subscribe((s, reason) => {
       setSession(s);
+      if (!s) setTermsPending(false);
       if (reason) setClearReason(reason);
     });
+    return () => {
+      unsubscribeTerms();
+      unsubscribeAuth();
+    };
   }, []);
 
   useEffect(() => {
@@ -56,10 +72,14 @@ export default function RootLayout() {
       }
       return;
     }
-    if (first !== SEGMENT_BY_ROLE[session.role]) {
+    if (termsPending) {
+      if (first !== "terms") router.replace("/terms");
+      return;
+    }
+    if (first !== SEGMENT_BY_ROLE[session.role] && first !== "terms") {
       router.replace(HOME_BY_ROLE[session.role]);
     }
-  }, [session, segments, fontsLoaded, authReady, clearReason, router]);
+  }, [session, segments, fontsLoaded, authReady, clearReason, termsPending, router]);
 
   if (!fontsLoaded || !authReady) return null;
 

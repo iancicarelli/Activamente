@@ -9,6 +9,7 @@
 //  - Sin red → ApiError con status 0 y mensaje humano.
 
 import { API_BASE_URL } from "./config";
+import { setTermsPending } from "./termsStore";
 import { getToken, clearAuth } from "./authStore";
 
 export interface ApiOptions extends Omit<RequestInit, "body"> {
@@ -79,6 +80,9 @@ export async function apiFetch<T = unknown>(
 
     if (auth && response.status === 401) clearAuth("expired");
     if (auth && response.status === 403 && /desactivad/i.test(String(detail))) clearAuth("forbidden");
+    // Términos vigentes sin aceptar (p. ej. se publicó una versión nueva con la sesión abierta):
+    // el root layout lleva a /terms.
+    if (auth && response.status === 403 && response.headers?.get?.("X-Terms-Required")) setTermsPending(true);
 
     throw new ApiError(String(detail).replace(/^Value error, /, ""), response.status);
   }

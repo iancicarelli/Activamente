@@ -2,15 +2,33 @@
 # Instalar: copiar a /srv/proxy/sites/ (o symlink), reemplazar DOMINIO, luego
 #   docker compose exec -w /etc/caddy caddy caddy validate && docker compose exec -w /etc/caddy caddy caddy reload
 # Los alias son PROXY_ALIAS de cada ambiente (ver activamente-back/CLAUDE.md "Despliegue").
+# Verificar después: LIVE_API_URL=https://api.DOMINIO scripts/test.sh live (test_https_security_headers).
+
+# Cabeceras de seguridad (SEC-11). Nombre con prefijo: los snippets son globales en el Caddy
+# compartido y no deben chocar con los de otros proyectos.
+(activamente_headers) {
+	header {
+		# Solo HTTPS durante un año (la app de release ya no habla HTTP).
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "no-referrer"
+		# La API no se muestra en iframes.
+		X-Frame-Options "DENY"
+		# No anunciar el software del servidor.
+		-Server
+	}
+}
 
 # Producción (rama main)
 api.DOMINIO {
+	import activamente_headers
 	encode zstd gzip
 	reverse_proxy activamente-api:8420
 }
 
 # Staging (rama develop)
 api-dev.DOMINIO {
+	import activamente_headers
 	encode zstd gzip
 	reverse_proxy activamente-api-dev:8420
 }

@@ -11,6 +11,7 @@ from scripts import create_admin
 from scripts.create_admin import BootstrapError, create_first_admin
 from tests import seed_data
 from tests.conftest import login
+from tests.helpers import accept_terms
 
 PASSWORD = "una-clave-larga-2026"
 
@@ -40,6 +41,7 @@ def test_creates_admin_with_profile_and_can_login(client, no_admins):
     assert no_admins.query(Admin).filter(Admin.user_id == user.id).one()
 
     token = login(client, email="jefa@activamente.cl", password=PASSWORD)
+    accept_terms(client, {"Authorization": f"Bearer {token['access_token']}"})
     r = client.get("/api/users?limit=1", headers={"Authorization": f"Bearer {token['access_token']}"})
     assert r.status_code == 200
 

@@ -1,21 +1,27 @@
 // screens/patient/PatientProfileScreen.tsx — perfil del paciente (UX-18):
 // datos reales de GET /api/me (HC-03), especialistas asignados con botón
-// "Llamar", próxima cita, cambio de contraseña y "Cerrar sesión" grande.
+// "Llamar", próxima cita, privacidad (releer los términos y pedir que se borre la cuenta,
+// Ley 21.719), cambio de contraseña y "Cerrar sesión" grande.
 import React, { useCallback, useState } from "react";
 import { Linking, ScrollView, StyleSheet, Text, View } from "react-native";
 import { MaterialCommunityIcons } from "@expo/vector-icons";
-import { useFocusEffect } from "expo-router";
+import { useFocusEffect, useRouter } from "expo-router";
 import { Screen, Banner, Card, Button, InfoRow, LoadingView, ErrorView, SectionTitle, confirm, useToast } from "../../components/ui";
 import { ChangePasswordModal } from "../../components/ChangePasswordModal";
 import { Colors, Fonts, FontSize } from "../../constants/theme";
 import { logout } from "../../services/authService";
 import { getMe, MeResponse } from "../../services/meService";
 import { getNextAppointment, Appointment } from "../../services/appointmentService";
-import { formatLongDate } from "../../utils/dates";
+import { getMyDeletionRequest, requestAccountDeletion, DeletionRequest } from "../../services/privacyService";
+import { routes } from "../../router/routes";
+import { formatLongDate, toDateString } from "../../utils/dates";
 import { getErrorMessage } from "../../utils/errors";
 
 export default function PatientProfileScreen() {
   const toast = useToast();
+  const router = useRouter();
+  const [deletion, setDeletion] = useState<DeletionRequest | null>(null);
+  const [requesting, setRequesting] = useState(false);
   const [me, setMe] = useState<MeResponse | null>(null);
   const [appointment, setAppointment] = useState<Appointment | null>(null);
   const [loading, setLoading] = useState(true);
@@ -26,9 +32,14 @@ export default function PatientProfileScreen() {
     setLoading(true);
     setError(null);
     try {
-      const [profile, appt] = await Promise.all([getMe(), getNextAppointment().catch(() => null)]);
+      const [profile, appt, del] = await Promise.all([
+        getMe(),
+        getNextAppointment().catch(() => null),
+        getMyDeletionRequest().catch(() => null),
+      ]);
       setMe(profile);
       setAppointment(appt);
+      setDeletion(del);
     } catch (e) {
       setError(getErrorMessage(e));
     } finally {
@@ -45,6 +56,24 @@ export default function PatientProfileScreen() {
   const handleLogout = async () => {
     const ok = await confirm("¿Cerrar sesión?", "Tendrás que ingresar tu correo o RUT y contraseña la próxima vez.", { confirmText: "Cerrar sesión", destructive: true });
     if (ok) logout();
+  };
+
+  const askDeletion = async () => {
+    const ok = await confirm(
+      "¿Eliminar tu cuenta?",
+      "Se enviará una solicitud al administrador. Si la aprueba, se borrarán tu cuenta y todos tus datos (sesiones, encuestas, rutinas y citas) y no se podrán recuperar.",
+      { confirmText: "Enviar solicitud", destructive: true }
+    );
+    if (!ok) return;
+    setRequesting(true);
+    try {
+      setDeletion(await requestAccountDeletion());
+      toast("Solicitud enviada");
+    } catch (e) {
+      toast(getErrorMessage(e), "error");
+    } finally {
+      setRequesting(false);
+    }
   };
 
   const call = (phone: string | null) => {
@@ -107,6 +136,32 @@ export default function PatientProfileScreen() {
               </Card>
             </>
           )}
+
+          <SectionTitle big>Privacidad</SectionTitle>
+          <Card>
+            <Button title="Ver términos y privacidad" size="patient" variant="outline" icon="file-document-outline" onPress={() => router.push(routes.terms)} />
+            {deletion?.status === "PENDING" ? (
+              <Text style={[styles.sub, { marginTop: 12 }]} testID="deletion-pending">
+                Pediste eliminar tu cuenta el {formatLongDate(toDateString(new Date(deletion.requested_at)))}. El administrador está revisando tu solicitud.
+              </Text>
+            ) : (
+              <>
+                {deletion?.status === "REJECTED" && (
+                  <Text style={[styles.sub, { marginTop: 12 }]}>Tu última solicitud de eliminación no fue aprobada. Si tienes dudas, habla con tu especialista.</Text>
+                )}
+                <Button
+                  title="Solicitar eliminación de mi cuenta"
+                  size="patient"
+                  variant="ghost"
+                  icon="account-remove-outline"
+                  onPress={askDeletion}
+                  loading={requesting}
+                  style={{ marginTop: 12 }}
+                  testID="request-deletion"
+                />
+              </>
+            )}
+          </Card>
 
           <Button title="Cambiar contraseña" size="patient" variant="outline" icon="lock-outline" onPress={() => setPasswordVisible(true)} style={{ marginTop: 8 }} />
           <Button title="Cerrar sesión" size="patient" variant="danger" icon="logout" onPress={handleLogout} style={{ marginTop: 12 }} testID="logout" />

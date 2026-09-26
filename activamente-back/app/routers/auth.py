@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.orm import Session
 
-from app.core.deps import get_current_user
+from app.core.deps import get_current_user_pending_terms
 from app.core.rate_limit import login_limiter
 from app.core.rut import normalize_rut, rut_column_normalized
 from app.core.security import create_access_token, hash_password, verify_password
@@ -80,7 +80,7 @@ def login(body: LoginRequest, request: Request, db: Session = Depends(get_db)):
 def change_password(
     body: ChangePasswordRequest,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user_pending_terms),
 ):
     """Cambia la contraseña del usuario logueado (cualquier rol). Reverifica la
     contraseña actual antes de guardar el nuevo hash."""

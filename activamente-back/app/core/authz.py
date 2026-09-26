@@ -6,6 +6,9 @@ Regla única (EP-01..EP-04):
   - ADMIN       → acceso a todo.
   - SPECIALIST  → solo pacientes asignados en specialist_patient.
   - PATIENT     → solo a sí mismo.
+
+Cada paso de un ADMIN o SPECIALIST por `assert_patient_access`, permitido o no, queda en
+`access_log` (app/core/audit.py).
 """
 
 from uuid import UUID
@@ -13,6 +16,7 @@ from uuid import UUID
 from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 
+from app.core.audit import record_patient_access
 from app.models.patient_model import Patient
 from app.models.routine_model import Routine
 from app.models.session_model import Session as SessionModel
@@ -57,7 +61,9 @@ def assert_patient_access(db: Session, user: User, patient_id) -> UUID:
     pid = _as_uuid(patient_id)
     if pid is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Paciente no encontrado.")
-    if not can_access_patient(db, user, pid):
+    allowed = can_access_patient(db, user, pid)
+    record_patient_access(user, pid, allowed)
+    if not allowed:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="No tienes acceso a este paciente.")
     return pid
 

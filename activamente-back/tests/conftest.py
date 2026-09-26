@@ -44,6 +44,7 @@ from fastapi.testclient import TestClient  # noqa: E402
 from sqlalchemy import create_engine  # noqa: E402
 from sqlalchemy.orm import Session  # noqa: E402
 
+from app.core import audit  # noqa: E402
 from app.core.rate_limit import login_limiter  # noqa: E402
 from app.core.security import create_access_token  # noqa: E402
 from app.database import get_db  # noqa: E402
@@ -100,9 +101,14 @@ def db(engine):
     connection = engine.connect()
     outer = connection.begin()
     session = Session(bind=connection, join_transaction_mode="create_savepoint", expire_on_commit=True)
+    # El registro de accesos escribe con su propia sesión (app/core/audit.py): en los tests va a
+    # la misma transacción, para que el ROLLBACK final también lo deshaga.
+    previous_factory = audit.session_factory
+    audit.session_factory = lambda: Session(bind=connection, join_transaction_mode="create_savepoint")
     try:
         yield session
     finally:
+        audit.session_factory = previous_factory
         session.close()
         outer.rollback()
         connection.close()

@@ -6,6 +6,7 @@ import { Alert, ScrollView, StyleSheet, Text, TouchableOpacity, View } from "rea
 import { MaterialCommunityIcons } from "@expo/vector-icons";
 import { useFocusEffect, useRouter } from "expo-router";
 import { Screen, Banner, Card, Button, Badge, LoadingView, ErrorView, SectionTitle, confirm, useToast } from "../../components/ui";
+import { DeletionRequestsCard } from "../../components/DeletionRequestsCard";
 import { SetPasswordModal } from "../../components/SetPasswordModal";
 import { UserEditModal } from "../../components/UserEditModal";
 import { Colors, Fonts, FontSize } from "../../constants/theme";
@@ -100,6 +101,8 @@ export default function AdminMainScreen() {
             <Text style={styles.statLabel}>Inactivos</Text>
           </Card>
         </View>
+
+        <DeletionRequestsCard onResolved={load} />
 
         <SectionTitle>Acciones rápidas</SectionTitle>
         <View style={styles.actions}>

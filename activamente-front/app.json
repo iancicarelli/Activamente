@@ -48,7 +48,6 @@
         }
       ],
       "@react-native-community/datetimepicker",
-      "expo-web-browser",
       [
         "react-native-vision-camera",
         {
